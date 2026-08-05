@@ -384,6 +384,9 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
     df['RVOL'] = df['Volume'] / df['Vol_SMA20']
     
+    # Daily Change %
+    df['Daily_Change_Pct'] = df['Close'].pct_change() * 100
+    
     return df''',
 
     "engine/analyzer.py": '''import pandas as pd
@@ -393,7 +396,6 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
         return {}
     
     latest = df.iloc[-1]
-    prev = df.iloc[-2]
     
     def safe_float(val):
         if hasattr(val, 'item'):
@@ -408,8 +410,8 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     atr = safe_float(latest['ATR'])
     macd = safe_float(latest['MACD'])
     macd_sig = safe_float(latest['MACD_Signal'])
+    daily_change = safe_float(latest['Daily_Change_Pct'])
     
-    # Signal Logic
     is_macd_bullish = macd > macd_sig
     is_trend_bullish = close_price > sma20 > sma50
     is_momentum_hot = 55 <= rsi <= 72
@@ -420,6 +422,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     return {
         "Ticker": ticker,
         "Price": round(close_price, 2),
+        "Daily_Change": round(daily_change, 2),
         "SMA20": round(sma20, 2),
         "SMA50": round(sma50, 2),
         "RSI": round(rsi, 2),
@@ -503,17 +506,14 @@ def render_candlestick_chart(df: pd.DataFrame, ticker: str):
         subplot_titles=(f"{ticker} Price & Trend", "RSI (14)", "MACD Indicator"), 
         row_heights=[0.5, 0.25, 0.25]
     )
-    # Candlesticks
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name="SMA 20", line=dict(color='orange', width=1.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name="SMA 50", line=dict(color='blue', width=1.5)), row=1, col=1)
     
-    # RSI
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple', width=1.5)), row=2, col=1)
     fig.add_hline(y=70, row=2, col=1, line_dash="dash", line_color="red", opacity=0.5)
     fig.add_hline(y=30, row=2, col=1, line_dash="dash", line_color="green", opacity=0.5)
     
-    # MACD
     fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], name="MACD", line=dict(color='cyan', width=1.5)), row=3, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], name="Signal", line=dict(color='magenta', width=1.5)), row=3, col=1)
     
@@ -530,17 +530,18 @@ from engine.scoring import score_market_condition
 from engine.setup_generator import generate_trade_setup
 from components.charts import render_candlestick_chart
 
-st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="🚀")
-st.title("🚀 Medhansh TradingLab — Indian Market Terminal")
+st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="👑")
+st.title("👑 Medhansh TradingLab — Daily Winner Terminal")
 
 st.sidebar.header("⚙️ Configuration & Filters")
 universe = load_stock_universe()
 st.sidebar.info(f"Market Universe: **{len(universe)}** Stocks")
 
 min_score = st.sidebar.slider("Minimum TradingLab Score:", 0, 50, 30)
-scan_button = st.sidebar.button("⚡ Run Full Market Scan", type="primary")
+scan_button = st.sidebar.button("⚡ Lock In Today's Scan", type="primary")
 
-@st.cache_data(ttl=600)
+# Cache set for 12 hours so the "Winner of the Day" remains stable throughout trading hours
+@st.cache_data(ttl=43200)
 def run_pipeline(ticker_list):
     results, chart_dfs = {}, {}
     batch_dfs = fetch_batch_market_data(ticker_list)
@@ -554,6 +555,7 @@ def run_pipeline(ticker_list):
             
             results[ticker] = {
                 "Price": condition.get('Price'),
+                "1D Change %": condition.get('Daily_Change', 0),
                 "Score": scores['total'],
                 "Status": scores['status'],
                 "Preferred_Buy": condition.get('Preferred_Buy', False),
@@ -570,65 +572,75 @@ def run_pipeline(ticker_list):
     return results, chart_dfs
 
 if scan_button or 'results' not in st.session_state:
-    with st.spinner("Analyzing top Indian stocks for high-conviction buy setups..."):
+    with st.spinner("Locking in daily market data to determine today's #1 winner..."):
         st.session_state.results, st.session_state.chart_dfs = run_pipeline(universe)
 
 results, chart_dfs = st.session_state.results, st.session_state.chart_dfs
 
 if results:
-    df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', 'Score', 'Status', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']].sort_values(by="Score", ascending=False)
+    df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']]
     
-    # Navigation Tabs
-    tab1, tab2 = st.tabs(["🔥 Preferred Stocks to Buy", "📊 Full Market Screener"])
+    # Stable Winner Pick Algorithm (Highest Score -> Highest RVOL -> Highest 1D Change %)
+    sorted_df = df_all.sort_values(by=['Score', 'RVOL', '1D Change %'], ascending=[False, False, False])
+    
+    winner_ticker = sorted_df.index[0]
+    winner_info = sorted_df.iloc[0]
+    winner_setup = results[winner_ticker]['Setup']
+
+    # BANNER: TOP WINNER OF THE DAY
+    st.markdown(f"""
+    <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
+        <h2 style="color: #00E676; margin-0;">🏆 OFFICIAL WINNER OF THE DAY: {winner_ticker}</h2>
+        <p style="font-size: 16px; color: #CCCCCC;">Highest conviction stock selected based on maximum TradingLab Score, volume surge, and trend momentum.</p>
+        <hr style="border-color: #333;">
+        <div style="display: flex; justify-content: space-between; flex-wrap: wrap;">
+            <div><b>Current Price:</b> ₹{winner_info['Price']} ({winner_info['1D Change %']}%)</div>
+            <div><b>TradingLab Score:</b> {winner_info['Score']}/50</div>
+            <div><b>RVOL:</b> {winner_info['RVOL']}x</div>
+            <div><b>Target:</b> ₹{winner_setup['Target']}</div>
+            <div><b>Stop Loss:</b> ₹{winner_setup['Stop Loss']}</div>
+        </div>
+    </div>
+    """, unsafe_allowed_click=True)
+
+    tab1, tab2 = st.tabs(["🔥 Top Buy Picks", "📊 Full Market Screener"])
     
     with tab1:
-        st.subheader("🔥 Top High-Conviction Buy Candidates")
-        st.write("These stocks meet **all strict quantitative buy criteria**: Bullish Trend (Price > SMA20 > SMA50), MACD Crossover, Hot RSI Momentum (55-72), and Volume Surge (RVOL >= 1.3x).")
-        
-        buy_picks = df_all[(df_all['Preferred_Buy'] == True) | (df_all['Score'] >= 40)]
-        
+        st.subheader("🔥 High-Conviction Candidates")
+        buy_picks = sorted_df[(sorted_df['Preferred_Buy'] == True) | (sorted_df['Score'] >= 40)]
         if not buy_picks.empty:
-            st.dataframe(buy_picks[['Price', 'Score', 'Status', 'RSI', 'RVOL', 'ATR']], use_container_width=True)
+            st.dataframe(buy_picks[['Price', '1D Change %', 'Score', 'Status', 'RSI', 'RVOL', 'ATR']], use_container_width=True)
         else:
-            st.warning("No stocks currently meet 100% of the strict breakout criteria. Check back near market close or adjust score filters.")
+            st.info("No other stocks meet 100% of the strict breakout filters today.")
 
     with tab2:
-        st.subheader("📊 All Stock Universe Screener")
-        filtered_df = df_all[df_all['Score'] >= min_score]
-        st.dataframe(filtered_df[['Price', 'Score', 'Status', 'RSI', 'RVOL', 'ATR']], use_container_width=True)
+        st.subheader("📊 All Stock Screener")
+        st.dataframe(sorted_df[sorted_df['Score'] >= min_score][['Price', '1D Change %', 'Score', 'Status', 'RSI', 'RVOL', 'ATR']], use_container_width=True)
 
     st.markdown("---")
     
-    # Stock Detail Viewer
-    all_available = df_all.index.tolist()
-    if all_available:
-        selected_stock = st.selectbox("Select Stock to View Detailed Analysis & Setup:", all_available)
-        if selected_stock:
-            stock_info, df_stock = results[selected_stock], chart_dfs[selected_stock]
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.markdown(f"### {selected_stock}")
-                st.metric("Current Price", f"₹{stock_info['Price']}")
-                st.metric("TradingLab Score", f"{stock_info['Score']} / 50", delta=stock_info['Status'])
-            with col2:
-                st.markdown("### Technical Metrics")
-                st.write(f"**RSI (14):** {stock_info['RSI']}")
-                st.write(f"**Relative Volume (RVOL):** {stock_info['RVOL']}x")
-                st.write(f"**ATR (14):** ₹{stock_info['ATR']}")
-                st.write(f"**Preferred Buy Status:** {'✅ YES' if stock_info['Preferred_Buy'] else '❌ NO'}")
-            with col3:
-                st.markdown("### Automated Trade Plan")
-                setup = stock_info['Setup']
-                st.write(f"**Suggested Entry:** ₹{setup['Entry']}")
-                st.write(f"**Stop Loss:** ₹{setup['Stop Loss']}")
-                st.write(f"**Target:** ₹{setup['Target']}")
-                st.write(f"**Risk/Reward Ratio:** {setup['Risk Reward']}")
-                
-            st.markdown("---")
-            st.markdown("### Technical Chart (Price, RSI & MACD)")
-            fig = render_candlestick_chart(df_stock, selected_stock)
-            st.plotly_chart(fig, use_container_width=True)'''
+    all_available = sorted_df.index.tolist()
+    selected_stock = st.selectbox("Inspect Chart & Plan for Any Stock:", all_available, index=0)
+    if selected_stock:
+        stock_info, df_stock = results[selected_stock], chart_dfs[selected_stock]
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(f"### {selected_stock}")
+            st.metric("Price", f"₹{stock_info['Price']}", f"{stock_info['1D Change %']}%")
+            st.metric("Score", f"{stock_info['Score']} / 50", delta=stock_info['Status'])
+        with col2:
+            st.markdown("### Metrics")
+            st.write(f"**RSI (14):** {stock_info['RSI']}")
+            st.write(f"**RVOL:** {stock_info['RVOL']}x")
+            st.write(f"**ATR:** ₹{stock_info['ATR']}")
+        with col3:
+            st.markdown("### Plan")
+            setup = stock_info['Setup']
+            st.write(f"**Entry:** ₹{setup['Entry']}")
+            st.write(f"**Stop Loss:** ₹{setup['Stop Loss']}")
+            st.write(f"**Target:** ₹{setup['Target']}")
+        st.markdown("---")
+        st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)'''
 }
 
 for path, content in files.items():
@@ -638,4 +650,4 @@ for path, content in files.items():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-print("✅ Updated trading platform generated with 'Top Buy Picks' feature!")
+print("✅ Upgraded TradingLab to include 'Winner of the Day' locking!")
