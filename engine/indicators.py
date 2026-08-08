@@ -6,6 +6,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
+    df['SMA200'] = df['Close'].rolling(window=200).mean()
     
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()

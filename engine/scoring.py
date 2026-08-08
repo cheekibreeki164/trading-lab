@@ -7,7 +7,7 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     
     scores = {}
     
-    if data['Price'] > data.get('VWAP', 0):
+    if data['Price'] > data['SMA20'] and data['Price'] > data.get('VWAP', 0):
         scores['Trend'] = 10
     elif data['Price'] > data['SMA20']:
         scores['Trend'] = 6
@@ -28,7 +28,7 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     else:
         scores['Volume'] = 2
         
-    atr_pct = (data['ATR'] / data['Price']) * 100 if data['Price'] > 0 else 0
+    atr_pct = (data['ATR'] / data['Price']) * 100
     if atr_pct <= 3.0:
         scores['Risk'] = 10
     elif atr_pct <= 5.0:
