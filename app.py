@@ -11,18 +11,19 @@ from components.charts import render_candlestick_chart
 st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
 st.title("⚡ Medhansh TradingLab — Intraday Algo Terminal")
 
-st.sidebar.header("🛡️ Capital & Leverage Settings")
+st.sidebar.header("🛡️ Capital & Risk Management")
 capital = st.sidebar.number_input("Total Cash Balance (₹):", min_value=500.0, value=4000.0, step=500.0)
 
-stop_loss_pct_input = st.sidebar.slider("Stop Loss (% below Entry):", 0.5, 5.0, 2.0, 0.5) / 100.0
+max_risk_pct_input = st.sidebar.slider("Max Balance Risk Per Trade (%):", 1.0, 5.0, 2.0, 0.5) / 100.0
 
 leverage_option = st.sidebar.radio("Leverage Mode:", ["1x (Cash)", "5x (Intraday MIS Leverage)"], index=1)
 leverage_multiplier = 5.0 if "5x" in leverage_option else 1.0
 
 buying_power = capital * leverage_multiplier
+max_risk_rupees = capital * max_risk_pct_input
 
 st.sidebar.info(f"💰 **Purchasing Power ({leverage_option}):** ₹{buying_power:,.2f}")
-st.sidebar.warning(f"🛑 **Stop Loss Distance:** {stop_loss_pct_input * 100:.1f}% below entry")
+st.sidebar.warning(f"🛑 **Max Account Loss Capped At:** ₹{max_risk_rupees:,.2f} ({max_risk_pct_input*100:.1f}%)")
 
 st.sidebar.header("⚙️ Configuration & Filters")
 universe = load_stock_universe()
@@ -30,7 +31,7 @@ min_score = st.sidebar.slider("Minimum Score:", 0, 50, 30)
 scan_button = st.sidebar.button("⚡ Run Algo Day Scan", type="primary")
 
 @st.cache_data(ttl=43200)
-def run_pipeline(ticker_list, capital_input, leverage_input, sl_pct):
+def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct):
     results, chart_dfs = {}, {}
     batch_dfs = fetch_batch_market_data(ticker_list)
     
@@ -44,7 +45,7 @@ def run_pipeline(ticker_list, capital_input, leverage_input, sl_pct):
                 condition.get('ATR', 0), 
                 total_capital=capital_input, 
                 leverage=leverage_input,
-                stop_loss_pct=sl_pct
+                max_risk_pct=risk_pct
             )
             
             results[ticker] = {
@@ -66,10 +67,10 @@ def run_pipeline(ticker_list, capital_input, leverage_input, sl_pct):
 
     return results, chart_dfs
 
-if scan_button or 'results' not in st.session_state or st.session_state.get('last_sl') != stop_loss_pct_input or st.session_state.get('last_lev') != leverage_multiplier:
-    with st.spinner(f"Calculating {leverage_multiplier}x Max Margin Setups with {stop_loss_pct_input*100}% Stop Loss..."):
-        st.session_state.results, st.session_state.chart_dfs = run_pipeline(universe, capital, leverage_multiplier, stop_loss_pct_input)
-        st.session_state.last_sl = stop_loss_pct_input
+if scan_button or 'results' not in st.session_state or st.session_state.get('last_risk') != max_risk_pct_input or st.session_state.get('last_lev') != leverage_multiplier:
+    with st.spinner(f"Calculating {leverage_multiplier}x Full Margin Setups (Capped at ₹{max_risk_rupees:.2f} Risk)..."):
+        st.session_state.results, st.session_state.chart_dfs = run_pipeline(universe, capital, leverage_multiplier, max_risk_pct_input)
+        st.session_state.last_risk = max_risk_pct_input
         st.session_state.last_lev = leverage_multiplier
 
 results, chart_dfs = st.session_state.results, st.session_state.chart_dfs
@@ -90,11 +91,11 @@ if results:
         <hr style="border-color: #333;">
         <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
             <div><b>Entry Price:</b> ₹{winner_setup['Entry']}</div>
-            <div><b>Stop Loss (2% Drop):</b> <span style="color:#FF5252;">₹{winner_setup['Stop Loss']}</span></div>
-            <div><b>Target (4% Gain):</b> <span style="color:#00E676;">₹{winner_setup['Target']}</span></div>
+            <div><b>Stop Loss ({winner_setup['SL_Pct']}% Drop):</b> <span style="color:#FF5252;">₹{winner_setup['Stop Loss']}</span></div>
+            <div><b>Target (2:1 Ratio):</b> <span style="color:#00E676;">₹{winner_setup['Target']}</span></div>
             <div><b>Leveraged Shares:</b> {winner_setup['Shares to Buy']}</div>
-            <div><b>Total Exposure:</b> ₹{winner_setup['Total Position Value']:,}</div>
             <div><b>Margin Used:</b> ₹{winner_setup['Margin Required']:,}</div>
+            <div><b>Max Rupee Risk:</b> ₹{winner_setup['Max Rupee Risk']} (2% Cash)</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -133,10 +134,10 @@ if results:
             st.markdown(f"### Trade Execution Plan ({leverage_multiplier}x Leverage)")
             setup = stock_info['Setup']
             st.write(f"**Entry:** ₹{setup['Entry']}")
-            st.write(f"**Stop Loss:** ₹{setup['Stop Loss']} (2% Drop)")
-            st.write(f"**Target (2:1 Ratio):** ₹{setup['Target']} (4% Gain)")
+            st.write(f"**Stop Loss:** ₹{setup['Stop Loss']} ({setup['SL_Pct']}% Drop)")
+            st.write(f"**Target (2:1 Ratio):** ₹{setup['Target']}")
             st.write(f"**Leveraged Shares to Buy:** {setup['Shares to Buy']} Shares")
             st.write(f"**Margin Used:** ₹{setup['Margin Required']:,}")
-            st.write(f"**Total Trade Value:** ₹{setup['Total Position Value']:,}")
+            st.write(f"**Max Loss Capped At:** ₹{setup['Max Rupee Risk']} (2% of cash)")
         st.markdown("---")
         st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
