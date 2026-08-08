@@ -355,40 +355,33 @@ import numpy as np
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     
-    # Moving Averages
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     df['SMA200'] = df['Close'].rolling(window=200).mean()
     
-    # VWAP (Volume Weighted Average Price) approximation
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
     
-    # RSI (14)
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
-    # MACD
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     
-    # ATR (14)
     high_low = df['High'] - df['Low']
     high_close = (df['High'] - df['Close'].shift()).abs()
     low_close = (df['Low'] - df['Close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(window=14).mean()
     
-    # RVOL
     df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
     df['RVOL'] = df['Volume'] / df['Vol_SMA20']
     
-    # Daily Change %
     df['Daily_Change_Pct'] = df['Close'].pct_change() * 100
     
     return df''',
@@ -527,44 +520,37 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
         "pattern": pattern_info['Pattern']
     }''',
 
-    "engine/setup_generator.py": '''def generate_daytrade_setup(price: float, atr: float, total_capital: float = 10000.0, leverage: float = 1.0, max_risk_pct: float = 0.02, rr_ratio: float = 2.0) -> dict:
+    "engine/setup_generator.py": '''def generate_daytrade_setup(price: float, atr: float, total_capital: float = 10000.0, leverage: float = 1.0, stop_loss_pct: float = 0.02, rr_ratio: float = 2.0) -> dict:
     """
-    Calculates 1x or 5x Leveraged Intraday Trade Execution Parameters
+    Direct % Stop Loss & Max Purchasing Power Sizer
     """
-    if not price or not atr or price <= 0:
+    if not price or price <= 0:
         return {
             "Entry": 0, "Stop Loss": 0, "Target": 0, "Max Rupee Risk": 0, 
             "Shares to Buy": 0, "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x"
         }
         
     effective_capital = total_capital * leverage
-    stop_loss = round(price - (1.2 * atr), 2)
-    risk_per_share = round(price - stop_loss, 2)
     
-    if risk_per_share <= 0:
-        risk_per_share = round(price * 0.01, 2)
-        stop_loss = round(price - risk_per_share, 2)
-
-    target = round(price + (risk_per_share * rr_ratio), 2)
-    max_rupee_risk = round(total_capital * max_risk_pct, 2)
+    # 2% Price Drop Stop Loss
+    stop_loss = round(price * (1 - stop_loss_pct), 2)
+    target = round(price * (1 + (stop_loss_pct * rr_ratio)), 2)
     
-    # Calculate quantity based on risk limit vs purchasing power limit
-    risk_based_qty = int(max_rupee_risk // risk_per_share) if risk_per_share > 0 else 0
-    max_purchasing_qty = int(effective_capital // price)
-    
-    # Final shares to buy capped by available 5x capital
-    shares_to_buy = min(risk_based_qty, max_purchasing_qty) if leverage > 1.0 else risk_based_qty
-    if shares_to_buy == 0 and max_purchasing_qty > 0:
+    # Buy maximum shares possible with available margin/buying power
+    shares_to_buy = int(effective_capital // price)
+    if shares_to_buy == 0:
         shares_to_buy = 1
         
     total_trade_value = round(shares_to_buy * price, 2)
     margin_required = round(total_trade_value / leverage, 2)
+    
+    # Rupee risk if 2% stop loss hits on full leveraged position
+    max_rupee_risk = round(shares_to_buy * (price - stop_loss), 2)
 
     return {
         "Entry": price,
         "Stop Loss": stop_loss,
         "Target": target,
-        "Risk Per Share": risk_per_share,
         "Max Rupee Risk": max_rupee_risk,
         "Shares to Buy": shares_to_buy,
         "Total Position Value": total_trade_value,
@@ -613,18 +599,18 @@ from components.charts import render_candlestick_chart
 st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
 st.title("⚡ Medhansh TradingLab — Intraday Algo Terminal")
 
-st.sidebar.header("🛡️ Capital & Risk Management")
-capital = st.sidebar.number_input("Total Cash Balance (₹):", min_value=500.0, value=10000.0, step=500.0)
+st.sidebar.header("🛡️ Capital & Leverage Settings")
+capital = st.sidebar.number_input("Total Cash Balance (₹):", min_value=500.0, value=4000.0, step=500.0)
 
-# Leverage Selection
+stop_loss_pct_input = st.sidebar.slider("Stop Loss (% below Entry):", 0.5, 5.0, 2.0, 0.5) / 100.0
+
 leverage_option = st.sidebar.radio("Leverage Mode:", ["1x (Cash)", "5x (Intraday MIS Leverage)"], index=1)
 leverage_multiplier = 5.0 if "5x" in leverage_option else 1.0
 
 buying_power = capital * leverage_multiplier
-max_risk_rupees = capital * 0.02
 
 st.sidebar.info(f"💰 **Purchasing Power ({leverage_option}):** ₹{buying_power:,.2f}")
-st.sidebar.warning(f"🛑 **Max Risk Allowed Per Trade (2% Cash):** ₹{max_risk_rupees:,.2f}")
+st.sidebar.warning(f"🛑 **Stop Loss Distance:** {stop_loss_pct_input * 100:.1f}% below entry")
 
 st.sidebar.header("⚙️ Configuration & Filters")
 universe = load_stock_universe()
@@ -632,7 +618,7 @@ min_score = st.sidebar.slider("Minimum Score:", 0, 50, 30)
 scan_button = st.sidebar.button("⚡ Run Algo Day Scan", type="primary")
 
 @st.cache_data(ttl=43200)
-def run_pipeline(ticker_list, capital_input, leverage_input):
+def run_pipeline(ticker_list, capital_input, leverage_input, sl_pct):
     results, chart_dfs = {}, {}
     batch_dfs = fetch_batch_market_data(ticker_list)
     
@@ -645,7 +631,8 @@ def run_pipeline(ticker_list, capital_input, leverage_input):
                 condition.get('Price', 0), 
                 condition.get('ATR', 0), 
                 total_capital=capital_input, 
-                leverage=leverage_input
+                leverage=leverage_input,
+                stop_loss_pct=sl_pct
             )
             
             results[ticker] = {
@@ -667,9 +654,10 @@ def run_pipeline(ticker_list, capital_input, leverage_input):
 
     return results, chart_dfs
 
-if scan_button or 'results' not in st.session_state or st.session_state.get('last_lev') != leverage_multiplier:
-    with st.spinner(f"Calculating {leverage_multiplier}x Intraday Setups & Risk Limits..."):
-        st.session_state.results, st.session_state.chart_dfs = run_pipeline(universe, capital, leverage_multiplier)
+if scan_button or 'results' not in st.session_state or st.session_state.get('last_sl') != stop_loss_pct_input or st.session_state.get('last_lev') != leverage_multiplier:
+    with st.spinner(f"Calculating {leverage_multiplier}x Max Margin Setups with {stop_loss_pct_input*100}% Stop Loss..."):
+        st.session_state.results, st.session_state.chart_dfs = run_pipeline(universe, capital, leverage_multiplier, stop_loss_pct_input)
+        st.session_state.last_sl = stop_loss_pct_input
         st.session_state.last_lev = leverage_multiplier
 
 results, chart_dfs = st.session_state.results, st.session_state.chart_dfs
@@ -690,8 +678,8 @@ if results:
         <hr style="border-color: #333;">
         <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
             <div><b>Entry Price:</b> ₹{winner_setup['Entry']}</div>
-            <div><b>Stop Loss:</b> <span style="color:#FF5252;">₹{winner_setup['Stop Loss']}</span></div>
-            <div><b>Target (2:1 Ratio):</b> <span style="color:#00E676;">₹{winner_setup['Target']}</span></div>
+            <div><b>Stop Loss (2% Drop):</b> <span style="color:#FF5252;">₹{winner_setup['Stop Loss']}</span></div>
+            <div><b>Target (4% Gain):</b> <span style="color:#00E676;">₹{winner_setup['Target']}</span></div>
             <div><b>Leveraged Shares:</b> {winner_setup['Shares to Buy']}</div>
             <div><b>Total Exposure:</b> ₹{winner_setup['Total Position Value']:,}</div>
             <div><b>Margin Used:</b> ₹{winner_setup['Margin Required']:,}</div>
@@ -733,11 +721,11 @@ if results:
             st.markdown(f"### Trade Execution Plan ({leverage_multiplier}x Leverage)")
             setup = stock_info['Setup']
             st.write(f"**Entry:** ₹{setup['Entry']}")
-            st.write(f"**Stop Loss:** ₹{setup['Stop Loss']}")
-            st.write(f"**Target (2:1 Ratio):** ₹{setup['Target']}")
+            st.write(f"**Stop Loss:** ₹{setup['Stop Loss']} (2% Drop)")
+            st.write(f"**Target (2:1 Ratio):** ₹{setup['Target']} (4% Gain)")
             st.write(f"**Leveraged Shares to Buy:** {setup['Shares to Buy']} Shares")
             st.write(f"**Margin Used:** ₹{setup['Margin Required']:,}")
-            st.write(f"**Max Capital Risked:** ₹{setup['Max Rupee Risk']:,} (2% of cash)")
+            st.write(f"**Total Trade Value:** ₹{setup['Total Position Value']:,}")
         st.markdown("---")
         st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)'''
 }
@@ -749,4 +737,4 @@ for path, content in files.items():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-print("✅ SUCCESS: Added 5x Leverage Calculator & Position Sizer!")
+print("✅ SUCCESS: Set Stop Loss to 2% Price Drop and Maxed Out Margin!")
