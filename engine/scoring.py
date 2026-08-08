@@ -1,11 +1,14 @@
-def score_market_condition(data: dict) -> dict:
+from engine.patterns import detect_chart_patterns
+import pandas as pd
+
+def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     if not data or 'Price' not in data or data['Price'] is None:
-        return {"total": 0, "status": "NO DATA", "breakdown": {}}
+        return {"total": 0, "status": "NO DATA", "breakdown": {}, "pattern": "None"}
     
     scores = {}
     
-    # 1. Trend Score (Max 10)
-    if data['Price'] > data['SMA20'] > data['SMA50']:
+    # 1. Trend & VWAP Score (Max 10)
+    if data['Price'] > data['SMA20'] and data['Price'] > data.get('VWAP', 0):
         scores['Trend'] = 10
     elif data['Price'] > data['SMA20']:
         scores['Trend'] = 6
@@ -40,7 +43,11 @@ def score_market_condition(data: dict) -> dict:
     # 5. MACD Confirmation (Max 10)
     scores['MACD'] = 10 if data.get('MACD_Bullish', False) else 4
     
-    total_score = sum(scores.values())
+    # Pattern Analysis Bonus
+    pattern_info = detect_chart_patterns(df) if df is not None else {"Pattern": "N/A", "Pattern_Score": 0}
+    
+    total_score = sum(scores.values()) + pattern_info['Pattern_Score']
+    total_score = min(total_score, 50) # Cap at 50
     
     if data.get('Preferred_Buy', False) or total_score >= 42:
         status = "MUST BUY 🔥"
@@ -49,4 +56,9 @@ def score_market_condition(data: dict) -> dict:
     else:
         status = "WEAK ❌"
         
-    return {"total": total_score, "status": status, "breakdown": scores}
+    return {
+        "total": total_score, 
+        "status": status, 
+        "breakdown": scores, 
+        "pattern": pattern_info['Pattern']
+    }

@@ -360,6 +360,10 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     df['SMA200'] = df['Close'].rolling(window=200).mean()
     
+    # VWAP (Volume Weighted Average Price) approximation
+    tp = (df['High'] + df['Low'] + df['Close']) / 3
+    df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
+    
     # RSI (14)
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -389,6 +393,40 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     
     return df''',
 
+    "engine/patterns.py": '''import pandas as pd
+
+def detect_chart_patterns(df: pd.DataFrame) -> dict:
+    """Detects Day Trading Chart Patterns"""
+    if df.empty or len(df) < 20:
+        return {"Pattern": "None", "Pattern_Score": 0}
+    
+    recent = df.tail(10)
+    latest = df.iloc[-1]
+    
+    patterns_found = []
+    bonus = 0
+    
+    # 1. VWAP Reclaim Breakout
+    if latest['Close'] > latest['VWAP'] and df.iloc[-2]['Close'] <= df.iloc[-2]['VWAP']:
+        patterns_found.append("VWAP Reclaim 🔥")
+        bonus += 5
+        
+    # 2. Bull Flag / Tight Range Consolidation
+    high_range = recent['High'].max()
+    low_range = recent['Low'].min()
+    price_spread = (high_range - low_range) / latest['Close'] * 100
+    if price_spread <= 3.5 and latest['RVOL'] >= 1.2:
+        patterns_found.append("Bull Flag Breakout 🚩")
+        bonus += 5
+
+    # 3. Volume Spike Day Trade Setup
+    if latest['RVOL'] >= 2.0 and latest['Daily_Change_Pct'] > 1.5:
+        patterns_found.append("Institutional Surge 🌊")
+        bonus += 5
+
+    pattern_name = " + ".join(patterns_found) if patterns_found else "Consolidation Range"
+    return {"Pattern": pattern_name, "Pattern_Score": bonus}''',
+
     "engine/analyzer.py": '''import pandas as pd
 
 def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
@@ -405,6 +443,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     close_price = safe_float(latest['Close'])
     sma20 = safe_float(latest['SMA20'])
     sma50 = safe_float(latest['SMA50'])
+    vwap = safe_float(latest['VWAP'])
     rsi = safe_float(latest['RSI'])
     rvol = safe_float(latest['RVOL'])
     atr = safe_float(latest['ATR'])
@@ -413,7 +452,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     daily_change = safe_float(latest['Daily_Change_Pct'])
     
     is_macd_bullish = macd > macd_sig
-    is_trend_bullish = close_price > sma20 > sma50
+    is_trend_bullish = close_price > sma20 > sma50 and close_price > vwap
     is_momentum_hot = 55 <= rsi <= 72
     is_volume_breakout = rvol >= 1.3
     
@@ -425,6 +464,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
         "Daily_Change": round(daily_change, 2),
         "SMA20": round(sma20, 2),
         "SMA50": round(sma50, 2),
+        "VWAP": round(vwap, 2),
         "RSI": round(rsi, 2),
         "ATR": round(atr, 2),
         "RVOL": round(rvol, 2),
@@ -432,14 +472,17 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
         "Preferred_Buy": is_buy_candidate
     }''',
 
-    "engine/scoring.py": '''def score_market_condition(data: dict) -> dict:
+    "engine/scoring.py": '''from engine.patterns import detect_chart_patterns
+import pandas as pd
+
+def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     if not data or 'Price' not in data or data['Price'] is None:
-        return {"total": 0, "status": "NO DATA", "breakdown": {}}
+        return {"total": 0, "status": "NO DATA", "breakdown": {}, "pattern": "None"}
     
     scores = {}
     
-    # 1. Trend Score (Max 10)
-    if data['Price'] > data['SMA20'] > data['SMA50']:
+    # 1. Trend & VWAP Score (Max 10)
+    if data['Price'] > data['SMA20'] and data['Price'] > data.get('VWAP', 0):
         scores['Trend'] = 10
     elif data['Price'] > data['SMA20']:
         scores['Trend'] = 6
@@ -474,7 +517,11 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     # 5. MACD Confirmation (Max 10)
     scores['MACD'] = 10 if data.get('MACD_Bullish', False) else 4
     
-    total_score = sum(scores.values())
+    # Pattern Analysis Bonus
+    pattern_info = detect_chart_patterns(df) if df is not None else {"Pattern": "N/A", "Pattern_Score": 0}
+    
+    total_score = sum(scores.values()) + pattern_info['Pattern_Score']
+    total_score = min(total_score, 50) # Cap at 50
     
     if data.get('Preferred_Buy', False) or total_score >= 42:
         status = "MUST BUY 🔥"
@@ -483,16 +530,42 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     else:
         status = "WEAK ❌"
         
-    return {"total": total_score, "status": status, "breakdown": scores}''',
+    return {
+        "total": total_score, 
+        "status": status, 
+        "breakdown": scores, 
+        "pattern": pattern_info['Pattern']
+    }''',
 
-    "engine/setup_generator.py": '''def generate_trade_setup(price: float, atr: float, risk_reward: float = 2.0) -> dict:
-    if not price or not atr:
-        return {"Entry": 0, "Stop Loss": 0, "Target": 0, "Risk Reward": "N/A"}
+    "engine/setup_generator.py": '''def generate_daytrade_setup(price: float, atr: float, total_capital: float = 10000.0, max_risk_pct: float = 0.02, rr_ratio: float = 2.0) -> dict:
+    """
+    Strict 2% Capital Risk Management & 2:1 Earn:Risk Ratio Calculator
+    """
+    if not price or not atr or price <= 0:
+        return {"Entry": 0, "Stop Loss": 0, "Target": 0, "Max Risk (₹)": 0, "Shares to Buy": 0, "Risk:Reward": "2:1"}
         
-    stop_loss = round(price - (1.5 * atr), 2)
-    risk = price - stop_loss
-    target = round(price + (risk * risk_reward), 2)
-    return {"Entry": price, "Stop Loss": stop_loss, "Target": target, "Risk Reward": f"{risk_reward}:1"}''',
+    stop_loss = round(price - (1.2 * atr), 2)
+    risk_per_share = round(price - stop_loss, 2)
+    
+    if risk_per_share <= 0:
+        risk_per_share = round(price * 0.01, 2)
+        stop_loss = round(price - risk_per_share, 2)
+
+    target = round(price + (risk_per_share * rr_ratio), 2)
+    max_rupee_risk = round(total_capital * max_risk_pct, 2)
+    shares_to_buy = int(max_rupee_risk // risk_per_share)
+    total_trade_value = round(shares_to_buy * price, 2)
+
+    return {
+        "Entry": price,
+        "Stop Loss": stop_loss,
+        "Target": target,
+        "Risk Per Share": risk_per_share,
+        "Max Rupee Risk": max_rupee_risk,
+        "Shares to Buy": shares_to_buy,
+        "Total Position Value": total_trade_value,
+        "Risk:Reward": "2:1"
+    }''',
 
     "components/charts.py": '''import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -503,13 +576,15 @@ def render_candlestick_chart(df: pd.DataFrame, ticker: str):
         rows=3, cols=1, 
         shared_xaxes=True, 
         vertical_spacing=0.05, 
-        subplot_titles=(f"{ticker} Price & Trend", "RSI (14)", "MACD Indicator"), 
+        subplot_titles=(f"{ticker} Day Trading Chart & VWAP", "RSI (14)", "MACD Indicator"), 
         row_heights=[0.5, 0.25, 0.25]
     )
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name="SMA 20", line=dict(color='orange', width=1.5)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name="SMA 50", line=dict(color='blue', width=1.5)), row=1, col=1)
     
+    if 'VWAP' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], name="VWAP", line=dict(color='yellow', width=2, dash='dot')), row=1, col=1)
+
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple', width=1.5)), row=2, col=1)
     fig.add_hline(y=70, row=2, col=1, line_dash="dash", line_color="red", opacity=0.5)
     fig.add_hline(y=30, row=2, col=1, line_dash="dash", line_color="green", opacity=0.5)
@@ -527,21 +602,23 @@ from engine.market_data import fetch_batch_market_data
 from engine.indicators import compute_indicators
 from engine.analyzer import extract_latest_condition
 from engine.scoring import score_market_condition
-from engine.setup_generator import generate_trade_setup
+from engine.setup_generator import generate_daytrade_setup
 from components.charts import render_candlestick_chart
 
-st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="👑")
-st.title("👑 Medhansh TradingLab — Daily Winner Terminal")
+st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
+st.title("⚡ Medhansh TradingLab — Intraday Algo Terminal")
+
+st.sidebar.header("🛡️ 2% Risk Management Calculator")
+capital = st.sidebar.number_input("Total Trading Capital (₹):", min_value=500.0, value=10000.0, step=500.0)
+st.sidebar.info(f"Max Risk Allowed Per Trade (2%): **₹{capital * 0.02:.2f}**")
 
 st.sidebar.header("⚙️ Configuration & Filters")
 universe = load_stock_universe()
-st.sidebar.info(f"Market Universe: **{len(universe)}** Stocks")
-
-min_score = st.sidebar.slider("Minimum TradingLab Score:", 0, 50, 30)
-scan_button = st.sidebar.button("⚡ Lock In Today's Scan", type="primary")
+min_score = st.sidebar.slider("Minimum Score:", 0, 50, 30)
+scan_button = st.sidebar.button("⚡ Run Algo Day Scan", type="primary")
 
 @st.cache_data(ttl=43200)
-def run_pipeline(ticker_list):
+def run_pipeline(ticker_list, capital_input):
     results, chart_dfs = {}, {}
     batch_dfs = fetch_batch_market_data(ticker_list)
     
@@ -549,14 +626,15 @@ def run_pipeline(ticker_list):
         try:
             df_ind = compute_indicators(df)
             condition = extract_latest_condition(df_ind, ticker)
-            scores = score_market_condition(condition)
-            setup = generate_trade_setup(condition.get('Price', 0), condition.get('ATR', 0))
+            scores = score_market_condition(condition, df_ind)
+            setup = generate_daytrade_setup(condition.get('Price', 0), condition.get('ATR', 0), total_capital=capital_input)
             
             results[ticker] = {
                 "Price": condition.get('Price'),
                 "1D Change %": condition.get('Daily_Change', 0),
                 "Score": scores['total'],
                 "Status": scores['status'],
+                "Pattern": scores['pattern'],
                 "Preferred_Buy": condition.get('Preferred_Buy', False),
                 "RSI": condition.get('RSI'),
                 "RVOL": condition.get('RVOL'),
@@ -571,13 +649,13 @@ def run_pipeline(ticker_list):
     return results, chart_dfs
 
 if scan_button or 'results' not in st.session_state:
-    with st.spinner("Locking in daily market data to determine today's #1 winner..."):
-        st.session_state.results, st.session_state.chart_dfs = run_pipeline(universe)
+    with st.spinner("Analyzing Intraday Algo Patterns, VWAP & 2% Risk Limits..."):
+        st.session_state.results, st.session_state.chart_dfs = run_pipeline(universe, capital)
 
 results, chart_dfs = st.session_state.results, st.session_state.chart_dfs
 
 if results:
-    df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']]
+    df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']]
     
     sorted_df = df_all.sort_values(by=['Score', 'RVOL', '1D Change %'], ascending=[False, False, False])
     
@@ -585,58 +663,59 @@ if results:
     winner_info = sorted_df.iloc[0]
     winner_setup = results[winner_ticker]['Setup']
 
-    # BANNER: TOP WINNER OF THE DAY
     st.markdown(f"""
     <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
-        <h2 style="color: #00E676; margin: 0;">🏆 OFFICIAL WINNER OF THE DAY: {winner_ticker}</h2>
-        <p style="font-size: 16px; color: #CCCCCC;">Highest conviction stock selected based on maximum TradingLab Score, volume surge, and trend momentum.</p>
+        <h2 style="color: #00E676; margin: 0;">🏆 #1 INTRADAY ALGO WINNER: {winner_ticker}</h2>
+        <p style="font-size: 15px; color: #CCCCCC;"><b>Pattern Detected:</b> {winner_info['Pattern']} | <b>Score:</b> {winner_info['Score']}/50</p>
         <hr style="border-color: #333;">
-        <div style="display: flex; justify-content: space-between; flex-wrap: wrap;">
-            <div><b>Current Price:</b> ₹{winner_info['Price']} ({winner_info['1D Change %']}%)</div>
-            <div><b>TradingLab Score:</b> {winner_info['Score']}/50</div>
-            <div><b>RVOL:</b> {winner_info['RVOL']}x</div>
-            <div><b>Target:</b> ₹{winner_setup['Target']}</div>
-            <div><b>Stop Loss:</b> ₹{winner_setup['Stop Loss']}</div>
+        <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div><b>Entry Price:</b> ₹{winner_setup['Entry']}</div>
+            <div><b>Stop Loss (Max Risk ₹{winner_setup['Max Rupee Risk']}):</b> <span style="color:#FF5252;">₹{winner_setup['Stop Loss']}</span></div>
+            <div><b>Target (2:1 Ratio):</b> <span style="color:#00E676;">₹{winner_setup['Target']}</span></div>
+            <div><b>Shares to Buy:</b> {winner_setup['Shares to Buy']}</div>
+            <div><b>Position Value:</b> ₹{winner_setup['Total Position Value']}</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs(["🔥 Top Buy Picks", "📊 Full Market Screener"])
+    tab1, tab2 = st.tabs(["🔥 Top Day Trade Picks", "📊 Full Algo Screener"])
     
     with tab1:
-        st.subheader("🔥 High-Conviction Candidates")
+        st.subheader("🔥 High-Conviction Breakout Candidates")
         buy_picks = sorted_df[(sorted_df['Preferred_Buy'] == True) | (sorted_df['Score'] >= 40)]
         if not buy_picks.empty:
-            st.dataframe(buy_picks[['Price', '1D Change %', 'Score', 'Status', 'RSI', 'RVOL', 'ATR']], use_container_width=True)
+            st.dataframe(buy_picks[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'RSI', 'RVOL']], use_container_width=True)
         else:
             st.info("No other stocks meet 100% of the strict breakout filters today.")
 
     with tab2:
         st.subheader("📊 All Stock Screener")
-        st.dataframe(sorted_df[sorted_df['Score'] >= min_score][['Price', '1D Change %', 'Score', 'Status', 'RSI', 'RVOL', 'ATR']], use_container_width=True)
+        st.dataframe(sorted_df[sorted_df['Score'] >= min_score][['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'RSI', 'RVOL']], use_container_width=True)
 
     st.markdown("---")
     
     all_available = sorted_df.index.tolist()
-    selected_stock = st.selectbox("Inspect Chart & Plan for Any Stock:", all_available, index=0)
+    selected_stock = st.selectbox("Inspect Algo Execution & Chart for Any Stock:", all_available, index=0)
     if selected_stock:
         stock_info, df_stock = results[selected_stock], chart_dfs[selected_stock]
         col1, col2, col3 = st.columns(3)
         with col1:
             st.markdown(f"### {selected_stock}")
             st.metric("Price", f"₹{stock_info['Price']}", f"{stock_info['1D Change %']}%")
-            st.metric("Score", f"{stock_info['Score']} / 50", delta=stock_info['Status'])
+            st.metric("Algo Score", f"{stock_info['Score']} / 50", delta=stock_info['Status'])
         with col2:
-            st.markdown("### Metrics")
+            st.markdown("### Metrics & Pattern")
+            st.write(f"**Pattern:** {stock_info['Pattern']}")
             st.write(f"**RSI (14):** {stock_info['RSI']}")
             st.write(f"**RVOL:** {stock_info['RVOL']}x")
-            st.write(f"**ATR:** ₹{stock_info['ATR']}")
         with col3:
-            st.markdown("### Plan")
+            st.markdown("### 2% Risk Trade Execution Plan")
             setup = stock_info['Setup']
             st.write(f"**Entry:** ₹{setup['Entry']}")
             st.write(f"**Stop Loss:** ₹{setup['Stop Loss']}")
-            st.write(f"**Target:** ₹{setup['Target']}")
+            st.write(f"**Target (2:1):** ₹{setup['Target']}")
+            st.write(f"**Exact Quantity:** {setup['Shares to Buy']} Shares")
+            st.write(f"**Max Capital Risked:** ₹{setup['Max Rupee Risk']} (2%)")
         st.markdown("---")
         st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)'''
 }
@@ -648,4 +727,4 @@ for path, content in files.items():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-print("✅ Fixed unsafe_allow_html argument!")
+print("✅ SUCCESS: Generated Intraday Patterns, VWAP & 2% Risk Calculator!")

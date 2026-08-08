@@ -9,6 +9,10 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     df['SMA200'] = df['Close'].rolling(window=200).mean()
     
+    # VWAP (Volume Weighted Average Price) approximation
+    tp = (df['High'] + df['Low'] + df['Close']) / 3
+    df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
+    
     # RSI (14)
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()

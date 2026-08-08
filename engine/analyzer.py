@@ -14,6 +14,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     close_price = safe_float(latest['Close'])
     sma20 = safe_float(latest['SMA20'])
     sma50 = safe_float(latest['SMA50'])
+    vwap = safe_float(latest['VWAP'])
     rsi = safe_float(latest['RSI'])
     rvol = safe_float(latest['RVOL'])
     atr = safe_float(latest['ATR'])
@@ -22,7 +23,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     daily_change = safe_float(latest['Daily_Change_Pct'])
     
     is_macd_bullish = macd > macd_sig
-    is_trend_bullish = close_price > sma20 > sma50
+    is_trend_bullish = close_price > sma20 > sma50 and close_price > vwap
     is_momentum_hot = 55 <= rsi <= 72
     is_volume_breakout = rvol >= 1.3
     
@@ -34,6 +35,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
         "Daily_Change": round(daily_change, 2),
         "SMA20": round(sma20, 2),
         "SMA50": round(sma50, 2),
+        "VWAP": round(vwap, 2),
         "RSI": round(rsi, 2),
         "ATR": round(atr, 2),
         "RVOL": round(rvol, 2),
