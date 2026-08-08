@@ -7,7 +7,6 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     
     scores = {}
     
-    # 1. Trend & VWAP Score (Max 10)
     if data['Price'] > data['SMA20'] and data['Price'] > data.get('VWAP', 0):
         scores['Trend'] = 10
     elif data['Price'] > data['SMA20']:
@@ -15,7 +14,6 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     else:
         scores['Trend'] = 2
         
-    # 2. Momentum Score (Max 10)
     if 55 <= data['RSI'] <= 70:
         scores['Momentum'] = 10
     elif 45 <= data['RSI'] < 55:
@@ -23,7 +21,6 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     else:
         scores['Momentum'] = 3
         
-    # 3. Volume Score (Max 10)
     if data['RVOL'] >= 1.5:
         scores['Volume'] = 10
     elif data['RVOL'] >= 1.0:
@@ -31,7 +28,6 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     else:
         scores['Volume'] = 2
         
-    # 4. Volatility Risk Score (Max 10)
     atr_pct = (data['ATR'] / data['Price']) * 100
     if atr_pct <= 3.0:
         scores['Risk'] = 10
@@ -40,14 +36,12 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     else:
         scores['Risk'] = 3
         
-    # 5. MACD Confirmation (Max 10)
     scores['MACD'] = 10 if data.get('MACD_Bullish', False) else 4
     
-    # Pattern Analysis Bonus
     pattern_info = detect_chart_patterns(df) if df is not None else {"Pattern": "N/A", "Pattern_Score": 0}
     
     total_score = sum(scores.values()) + pattern_info['Pattern_Score']
-    total_score = min(total_score, 50) # Cap at 50
+    total_score = min(total_score, 50)
     
     if data.get('Preferred_Buy', False) or total_score >= 42:
         status = "MUST BUY 🔥"
