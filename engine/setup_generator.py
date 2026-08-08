@@ -2,28 +2,26 @@ def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.
     if not price or price <= 0:
         return {
             "Entry": 0, "Stop Loss": 0, "Target": 0, "Max Rupee Risk": 0, 
-            "Actual Rupee Risk": 0, "Actual Account Risk Pct": 0, "Shares to Buy": 0, 
+            "Target Rupee Risk": 0, "Actual Account Risk Pct": 0, "Shares to Buy": 0, 
             "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x", "SL_Pct": 0
         }
 
-    effective_capital = total_capital * leverage
-    target_rupee_risk = total_capital * max_risk_pct
+    # Total buying power using 100% capital with leverage
+    buying_power = total_capital * leverage
     
-    # Dynamic ATR risk per share (1.5x ATR)
-    risk_per_share = (atr * 1.5) if (atr and atr > 0) else (price * 0.015)
-    
-    # Calculate shares based on risk budget
-    shares_by_risk = int(target_rupee_risk // risk_per_share) if risk_per_share > 0 else 1
-    # Calculate maximum shares allowed by total buying power
-    shares_by_capital = int(effective_capital // price)
-    
-    # Size position to target risk while staying within buying power limits
-    shares_to_buy = min(shares_by_risk, shares_by_capital)
+    # 1. Buy 100% capacity based on buying power
+    shares_to_buy = int(buying_power // price)
     if shares_to_buy < 1:
         shares_to_buy = 1
         
     total_trade_value = round(shares_to_buy * price, 2)
     margin_required = round(total_trade_value / leverage, 2)
+    
+    # 2. Set total risk budget (e.g. 2% of total_capital = ₹80)
+    target_rupee_risk = total_capital * max_risk_pct
+    
+    # 3. Calculate Stop Loss distance per share to match ₹ risk strictly
+    risk_per_share = target_rupee_risk / shares_to_buy
     
     stop_loss = round(price - risk_per_share, 2)
     target = round(price + (risk_per_share * 2.0), 2)
