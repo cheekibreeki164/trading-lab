@@ -47,7 +47,7 @@ buying_power = capital * leverage_multiplier
 max_risk_rupees = capital * max_risk_pct_input
 
 st.sidebar.info(f"💰 **Purchasing Power:** ₹{buying_power:,.2f}")
-st.sidebar.warning(f"🛑 **Max Account Loss Capped At:** ₹{max_risk_rupees:,.2f} ({max_risk_pct_input*100:.1f}%)")
+st.sidebar.warning(f"🛑 **Target Max Loss Capped At:** ₹{max_risk_rupees:,.2f} ({max_risk_pct_input*100:.1f}%)")
 
 st.sidebar.header("⏱️ Live Refresh Engine")
 enable_autorefresh = st.sidebar.checkbox("Enable Auto-Refresh", value=True)
@@ -123,7 +123,7 @@ if results:
             <div><b>Target Price:</b> <span style="color:#00E676;">₹{winner_setup['Target']}</span></div>
             <div><b>Position Size:</b> {winner_setup['Shares to Buy']} Shares</div>
             <div><b>Capital Allocated:</b> ₹{winner_setup['Margin Required']:,}</div>
-            <div><b>Max Loss Capped At:</b> ₹{winner_setup['Max Rupee Risk']}</div>
+            <div><b>Actual Rupee Risk:</b> ₹{winner_setup['Max Rupee Risk']} ({winner_setup['Actual Account Risk Pct']}%)</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -167,7 +167,7 @@ if results:
             st.write(f"**Target (1:2 R:R):** ₹{setup['Target']}")
             st.write(f"**Quantity:** {setup['Shares to Buy']} Shares")
             st.write(f"**Capital Needed:** ₹{setup['Margin Required']:,}")
-            st.write(f"**Max Loss Risk:** ₹{setup['Max Rupee Risk']}")
+            st.write(f"**Actual Risk:** ₹{setup['Max Rupee Risk']} ({setup['Actual Account Risk Pct']}% of capital)")
         st.markdown("---")
         st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
 else:

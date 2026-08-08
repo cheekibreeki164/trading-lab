@@ -2,7 +2,7 @@ def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.
     if not price or price <= 0:
         return {
             "Entry": 0, "Stop Loss": 0, "Target": 0, "Max Rupee Risk": 0, 
-            "Actual Risk Rupee": 0, "Actual Risk Pct": 0, "Shares to Buy": 0, 
+            "Actual Rupee Risk": 0, "Actual Account Risk Pct": 0, "Shares to Buy": 0, 
             "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x", "SL_Pct": 0
         }
 
@@ -37,8 +37,8 @@ def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.
         "Entry": price,
         "Stop Loss": max(stop_loss, 0.1),
         "Target": target,
+        "Max Rupee Risk": actual_rupee_risk,
         "Target Rupee Risk": round(target_rupee_risk, 2),
-        "Actual Rupee Risk": actual_rupee_risk,
         "Actual Account Risk Pct": actual_risk_pct,
         "Shares to Buy": shares_to_buy,
         "Total Position Value": total_trade_value,
