@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import datetime
+from streamlit_autorefresh import st_autorefresh
 from engine.data_loader import load_stock_universe
 from engine.market_data import fetch_batch_market_data
 from engine.indicators import compute_indicators
@@ -9,11 +11,17 @@ from engine.setup_generator import generate_daytrade_setup
 from components.charts import render_candlestick_chart
 
 st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
-st.title("⚡ Medhansh TradingLab — Daily Algo Terminal")
+
+# Sidebar - Realtime refresh toggle
+st.sidebar.header("⏱️ Live Refresh Engine")
+enable_autorefresh = st.sidebar.checkbox("Enable Auto-Refresh", value=True)
+refresh_seconds = st.sidebar.slider("Refresh Interval (Seconds):", 15, 120, 30, 15)
+
+if enable_autorefresh:
+    count = st_autorefresh(interval=refresh_seconds * 1000, key="daily_auto_refresh")
 
 st.sidebar.header("🛡️ Capital & Risk Management")
 capital = st.sidebar.number_input("Total Cash Balance (₹):", min_value=500.0, value=4000.0, step=500.0)
-
 max_risk_pct_input = st.sidebar.slider("Max Balance Risk Per Trade (%):", 1.0, 5.0, 2.0, 0.5) / 100.0
 
 leverage_option = st.sidebar.radio("Leverage Mode:", ["1x (Cash)", "5x (Intraday MIS Leverage)"], index=1)
@@ -28,9 +36,13 @@ st.sidebar.warning(f"🛑 **Max Account Loss Capped At:** ₹{max_risk_rupees:,.
 st.sidebar.header("⚙️ Configuration & Filters")
 universe = load_stock_universe()
 min_score = st.sidebar.slider("Minimum Score:", 0, 50, 30)
-scan_button = st.sidebar.button("⚡ Run Algo Day Scan", type="primary")
 
-@st.cache_data(ttl=43200)
+# Header Bar
+now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
+st.title("⚡ Medhansh TradingLab — Daily Algo Terminal")
+st.caption(f"🟢 **LIVE ENGINE ACTIVE** | Last Update: `{now_str}` | Auto Refresh: `{refresh_seconds}s`")
+
+@st.cache_data(ttl=20)
 def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct):
     results, chart_dfs = {}, {}
     batch_dfs = fetch_batch_market_data(ticker_list)
@@ -67,13 +79,8 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct):
 
     return results, chart_dfs
 
-if scan_button or 'results' not in st.session_state or st.session_state.get('last_risk') != max_risk_pct_input or st.session_state.get('last_lev') != leverage_multiplier:
-    with st.spinner(f"Calculating {leverage_multiplier}x Full Margin Setups (Capped at ₹{max_risk_rupees:.2f} Risk)..."):
-        st.session_state.results, st.session_state.chart_dfs = run_pipeline(universe, capital, leverage_multiplier, max_risk_pct_input)
-        st.session_state.last_risk = max_risk_pct_input
-        st.session_state.last_lev = leverage_multiplier
-
-results, chart_dfs = st.session_state.results, st.session_state.chart_dfs
+# Execute pipeline
+results, chart_dfs = run_pipeline(universe, capital, leverage_multiplier, max_risk_pct_input)
 
 if results:
     df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']]
