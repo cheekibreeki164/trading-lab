@@ -1,7 +1,7 @@
 import pandas as pd
 
 def detect_chart_patterns(df: pd.DataFrame) -> dict:
-    if df.empty or len(df) < 15:
+    if df.empty or len(df) < 10:
         return {"Pattern": "None", "Pattern_Score": 0}
     
     recent = df.tail(10)

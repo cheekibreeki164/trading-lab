@@ -18,7 +18,7 @@ def fetch_batch_market_data(tickers: list, period: str = "6mo") -> dict:
                 try:
                     if ticker in data.columns.levels[0]:
                         df = data[ticker].dropna()
-                        if not df.empty and len(df) >= 20:
+                        if not df.empty and len(df) >= 15:
                             stock_dfs[ticker] = df
                 except Exception:
                     continue

@@ -8,7 +8,7 @@ def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.
     effective_capital = total_capital * leverage
     max_rupee_risk = round(total_capital * max_risk_pct, 2)
     
-    # Use dynamic ATR multiplier; fallback to 1.5% if ATR is unavailable/zero
+    # Dynamic ATR risk; fallback to 1.5% volatility if ATR unavailable
     risk_per_share = (atr * 1.5) if (atr and atr > 0) else (price * 0.015)
     
     shares_by_risk = int(max_rupee_risk // risk_per_share) if risk_per_share > 0 else 1
