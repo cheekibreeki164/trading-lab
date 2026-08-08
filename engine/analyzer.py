@@ -1,7 +1,7 @@
 import pandas as pd
 
 def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
-    if df.empty or len(df) < 50:
+    if df.empty or len(df) < 15:
         return {}
     
     latest = df.iloc[-1]
@@ -9,18 +9,21 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     def safe_float(val):
         if hasattr(val, 'item'):
             return float(val.item())
-        return float(val)
+        try:
+            return float(val)
+        except Exception:
+            return 0.0
 
     close_price = safe_float(latest['Close'])
-    sma20 = safe_float(latest['SMA20'])
-    sma50 = safe_float(latest['SMA50'])
-    vwap = safe_float(latest['VWAP'])
-    rsi = safe_float(latest['RSI'])
-    rvol = safe_float(latest['RVOL'])
-    atr = safe_float(latest['ATR'])
-    macd = safe_float(latest['MACD'])
-    macd_sig = safe_float(latest['MACD_Signal'])
-    daily_change = safe_float(latest['Daily_Change_Pct'])
+    sma20 = safe_float(latest.get('SMA20', close_price))
+    sma50 = safe_float(latest.get('SMA50', close_price))
+    vwap = safe_float(latest.get('VWAP', close_price))
+    rsi = safe_float(latest.get('RSI', 50))
+    rvol = safe_float(latest.get('RVOL', 1.0))
+    atr = safe_float(latest.get('ATR', close_price * 0.02))
+    macd = safe_float(latest.get('MACD', 0))
+    macd_sig = safe_float(latest.get('MACD_Signal', 0))
+    daily_change = safe_float(latest.get('Daily_Change_Pct', 0))
     
     is_macd_bullish = macd > macd_sig
     is_trend_bullish = close_price > sma20 > sma50 and close_price > vwap
