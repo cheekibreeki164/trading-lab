@@ -2,18 +2,22 @@ def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.
     if not price or price <= 0:
         return {
             "Entry": 0, "Stop Loss": 0, "Target": 0, "Max Rupee Risk": 0, 
-            "Shares to Buy": 0, "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x", "SL_Pct": 0
+            "Actual Risk Rupee": 0, "Actual Risk Pct": 0, "Shares to Buy": 0, 
+            "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x", "SL_Pct": 0
         }
 
     effective_capital = total_capital * leverage
-    max_rupee_risk = round(total_capital * max_risk_pct, 2)
+    target_rupee_risk = total_capital * max_risk_pct
     
-    # Dynamic ATR risk; fallback to 1.5% volatility if ATR unavailable
+    # Dynamic ATR risk per share (1.5x ATR)
     risk_per_share = (atr * 1.5) if (atr and atr > 0) else (price * 0.015)
     
-    shares_by_risk = int(max_rupee_risk // risk_per_share) if risk_per_share > 0 else 1
+    # Calculate shares based on risk budget
+    shares_by_risk = int(target_rupee_risk // risk_per_share) if risk_per_share > 0 else 1
+    # Calculate maximum shares allowed by total buying power
     shares_by_capital = int(effective_capital // price)
     
+    # Size position to target risk while staying within buying power limits
     shares_to_buy = min(shares_by_risk, shares_by_capital)
     if shares_to_buy < 1:
         shares_to_buy = 1
@@ -25,12 +29,17 @@ def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.
     target = round(price + (risk_per_share * 2.0), 2)
     
     sl_distance_pct = round(((price - stop_loss) / price) * 100, 2)
+    
+    actual_rupee_risk = round(shares_to_buy * risk_per_share, 2)
+    actual_risk_pct = round((actual_rupee_risk / total_capital) * 100, 2)
 
     return {
         "Entry": price,
         "Stop Loss": max(stop_loss, 0.1),
         "Target": target,
-        "Max Rupee Risk": max_rupee_risk,
+        "Target Rupee Risk": round(target_rupee_risk, 2),
+        "Actual Rupee Risk": actual_rupee_risk,
+        "Actual Account Risk Pct": actual_risk_pct,
         "Shares to Buy": shares_to_buy,
         "Total Position Value": total_trade_value,
         "Margin Required": margin_required,
