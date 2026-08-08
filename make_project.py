@@ -358,7 +358,6 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     
     df['SMA20'] = df['Close'].rolling(window=min(20, len(df))).mean()
     df['SMA50'] = df['Close'].rolling(window=min(50, len(df))).mean()
-    df['SMA200'] = df['Close'].rolling(window=min(200, len(df))).mean()
     
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
@@ -436,7 +435,6 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     close_price = safe_float(latest['Close'])
     sma20 = safe_float(latest.get('SMA20', close_price))
     sma50 = safe_float(latest.get('SMA50', close_price))
-    sma200 = safe_float(latest.get('SMA200', close_price))
     vwap = safe_float(latest.get('VWAP', close_price))
     rsi = safe_float(latest.get('RSI', 50))
     rvol = safe_float(latest.get('RVOL', 1.0))
@@ -458,7 +456,6 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
         "Daily_Change": round(daily_change, 2),
         "SMA20": round(sma20, 2),
         "SMA50": round(sma50, 2),
-        "SMA200": round(sma200, 2),
         "VWAP": round(vwap, 2),
         "RSI": round(rsi, 2),
         "ATR": round(atr, 2),
@@ -470,36 +467,20 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     "engine/scoring.py": '''from engine.patterns import detect_chart_patterns
 import pandas as pd
 
-def score_market_condition(data: dict, df: pd.DataFrame = None, trade_style: str = "Intraday") -> dict:
+def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     if not data or 'Price' not in data or data['Price'] is None:
         return {"total": 0, "status": "NO DATA", "breakdown": {}, "pattern": "None"}
     
     scores = {}
     price = data['Price']
     
-    if trade_style == "Intraday":
-        # Intraday prioritizes RVOL, VWAP, and short-term volatility/momentum
-        scores['VWAP_Reclaim'] = 12 if price > data.get('VWAP', 0) else 3
-        scores['RVOL_Surge'] = 12 if data['RVOL'] >= 1.5 else (8 if data['RVOL'] >= 1.1 else 2)
-        scores['RSI_Momentum'] = 10 if 55 <= data['RSI'] <= 75 else 4
-        scores['Short_Trend'] = 10 if price > data['SMA20'] else 3
-        scores['MACD_Bull'] = 6 if data.get('MACD_Bullish', False) else 2
-        
-    elif trade_style == "Swing Trade":
-        # Swing prioritizes 20/50 SMA trend, MACD alignment, and sustainable RSI
-        scores['Trend_20_50'] = 15 if price > data['SMA20'] > data['SMA50'] else (8 if price > data['SMA20'] else 2)
-        scores['MACD_Structure'] = 12 if data.get('MACD_Bullish', False) else 3
-        scores['RSI_Health'] = 10 if 50 <= data['RSI'] <= 68 else 4
-        scores['Volume_Support'] = 8 if data['RVOL'] >= 1.1 else 3
-        scores['ATR_Risk'] = 5 if (data['ATR']/price)*100 <= 4.0 else 2
-
-    else:  # Long-Term
-        # Long-term prioritizes 200 SMA alignment, lower ATR volatility, and valuation safety
-        scores['Trend_200SMA'] = 18 if price > data.get('SMA200', price) else 2
-        scores['Trend_50SMA'] = 12 if price > data['SMA50'] else 4
-        scores['Low_Volatility'] = 10 if (data['ATR']/price)*100 <= 3.0 else 4
-        scores['RSI_Value'] = 10 if 40 <= data['RSI'] <= 62 else 3
-
+    scores['Trend_SMA20'] = 10 if price > data['SMA20'] else 2
+    scores['Trend_SMA50'] = 8 if price > data['SMA50'] else 2
+    scores['VWAP_Reclaim'] = 10 if price > data.get('VWAP', 0) else 2
+    scores['RSI_Momentum'] = 10 if 55 <= data['RSI'] <= 70 else (5 if 40 <= data['RSI'] < 55 else 2)
+    scores['RVOL_Surge'] = 10 if data['RVOL'] >= 1.5 else (6 if data['RVOL'] >= 1.1 else 2)
+    scores['MACD_Bull'] = 7 if data.get('MACD_Bullish', False) else 2
+    
     pattern_info = detect_chart_patterns(df) if df is not None else {"Pattern": "N/A", "Pattern_Score": 0}
     
     total_score = sum(scores.values()) + pattern_info['Pattern_Score']
@@ -519,27 +500,17 @@ def score_market_condition(data: dict, df: pd.DataFrame = None, trade_style: str
         "pattern": pattern_info['Pattern']
     }''',
 
-    "engine/setup_generator.py": '''def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.0, leverage: float = 1.0, max_risk_pct: float = 0.02, trade_style: str = "Intraday") -> dict:
+    "engine/setup_generator.py": '''def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.0, leverage: float = 1.0, max_risk_pct: float = 0.02) -> dict:
     if not price or price <= 0:
         return {
             "Entry": 0, "Stop Loss": 0, "Target": 0, "Max Rupee Risk": 0, 
-            "Shares to Buy": 0, "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x", "SL_Pct": 0, "RR_Ratio": "1:2"
+            "Shares to Buy": 0, "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x", "SL_Pct": 0
         }
-
-    if trade_style == "Intraday":
-        sl_atr_mult = 1.0
-        rr_ratio = 2.0
-    elif trade_style == "Swing Trade":
-        sl_atr_mult = 2.0
-        rr_ratio = 2.5
-    else:  # Long-Term
-        sl_atr_mult = 3.0
-        rr_ratio = 3.0
 
     effective_capital = total_capital * leverage
     max_rupee_risk = round(total_capital * max_risk_pct, 2)
     
-    risk_per_share = atr * sl_atr_mult if atr > 0 else price * 0.02
+    risk_per_share = atr * 1.5 if atr > 0 else price * 0.02
     
     shares_by_risk = int(max_rupee_risk // risk_per_share) if risk_per_share > 0 else 1
     shares_by_capital = int(effective_capital // price)
@@ -552,7 +523,7 @@ def score_market_condition(data: dict, df: pd.DataFrame = None, trade_style: str
     margin_required = round(total_trade_value / leverage, 2)
     
     stop_loss = round(price - risk_per_share, 2)
-    target = round(price + (risk_per_share * rr_ratio), 2)
+    target = round(price + (risk_per_share * 2.0), 2)
     
     sl_distance_pct = round(((price - stop_loss) / price) * 100, 2)
 
@@ -565,20 +536,19 @@ def score_market_condition(data: dict, df: pd.DataFrame = None, trade_style: str
         "Total Position Value": total_trade_value,
         "Margin Required": margin_required,
         "Leverage": f"{int(leverage)}x",
-        "SL_Pct": sl_distance_pct,
-        "RR_Ratio": f"1:{rr_ratio}"
+        "SL_Pct": sl_distance_pct
     }''',
 
     "components/charts.py": '''import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 
-def render_candlestick_chart(df: pd.DataFrame, ticker: str, style_name: str = "Intraday"):
+def render_candlestick_chart(df: pd.DataFrame, ticker: str):
     fig = make_subplots(
         rows=3, cols=1, 
         shared_xaxes=True, 
         vertical_spacing=0.05, 
-        subplot_titles=(f"{ticker} ({style_name} Mode) Price & Indicators", "RSI (14)", "MACD Indicator"), 
+        subplot_titles=(f"{ticker} Price & Indicators", "RSI (14)", "MACD Indicator"), 
         row_heights=[0.5, 0.25, 0.25]
     )
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"), row=1, col=1)
@@ -587,9 +557,7 @@ def render_candlestick_chart(df: pd.DataFrame, ticker: str, style_name: str = "I
         fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name="SMA 20", line=dict(color='orange', width=1.5)), row=1, col=1)
     if 'SMA50' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name="SMA 50", line=dict(color='blue', width=1.5)), row=1, col=1)
-    if 'SMA200' in df.columns and style_name == "Long-Term":
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA200'], name="SMA 200", line=dict(color='white', width=2)), row=1, col=1)
-    if 'VWAP' in df.columns and style_name == "Intraday":
+    if 'VWAP' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], name="VWAP", line=dict(color='yellow', width=2, dash='dot')), row=1, col=1)
 
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI", line=dict(color='purple', width=1.5)), row=2, col=1)
@@ -616,25 +584,22 @@ from components.charts import render_candlestick_chart
 
 st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
 
-st.sidebar.header("🎯 Trading Horizons & Mode")
+st.sidebar.header("🎯 Trading Strategy Profiles")
 trade_style = st.sidebar.radio(
-    "Select Strategy Profile:",
-    ["⚡ Intraday", "📈 Swing Trade", "🏦 Long-Term"],
+    "Select Horizon:",
+    ["⚡ Intraday Breakdown", "📈 Swing Trade Setup", "🏦 Long-Term Breakout"],
     index=0
 )
 
 if "Intraday" in trade_style:
-    style_key = "Intraday"
     default_period = "1mo"
     default_risk = 1.5
     default_lev = "5x (Intraday MIS Leverage)"
 elif "Swing" in trade_style:
-    style_key = "Swing Trade"
     default_period = "6mo"
     default_risk = 2.5
     default_lev = "1x (Cash Delivery)"
 else:
-    style_key = "Long-Term"
     default_period = "2y"
     default_risk = 3.5
     default_lev = "1x (Cash Delivery)"
@@ -668,11 +633,11 @@ universe = load_stock_universe()
 min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 30)
 
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
-st.title(f"⚡ Medhansh TradingLab — {style_key} Mode")
-st.caption(f"🟢 **MODE:** `{style_key.upper()}` | Last Update: `{now_str}` | Auto Refresh: `{refresh_seconds}s` | Fetch Period: `{default_period}`")
+st.title(f"⚡ Medhansh TradingLab — {trade_style}")
+st.caption(f"🟢 **SYSTEM ONLINE** | Last Update: `{now_str}` | Auto Refresh: `{refresh_seconds}s` | Fetch Period: `{default_period}`")
 
 @st.cache_data(ttl=20)
-def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback, current_style):
+def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback):
     results, chart_dfs = {}, {}
     batch_dfs = fetch_batch_market_data(ticker_list, period=period_lookback)
     
@@ -680,14 +645,13 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
         try:
             df_ind = compute_indicators(df)
             condition = extract_latest_condition(df_ind, ticker)
-            scores = score_market_condition(condition, df_ind, trade_style=current_style)
+            scores = score_market_condition(condition, df_ind)
             setup = generate_trade_setup(
                 condition.get('Price', 0), 
                 condition.get('ATR', 0), 
                 total_capital=capital_input, 
                 leverage=leverage_input,
-                max_risk_pct=risk_pct,
-                trade_style=current_style
+                max_risk_pct=risk_pct
             )
             
             results[ticker] = {
@@ -710,7 +674,7 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
     return results, chart_dfs
 
 # Execute pipeline
-results, chart_dfs = run_pipeline(universe, capital, leverage_multiplier, max_risk_pct_input, default_period, style_key)
+results, chart_dfs = run_pipeline(universe, capital, leverage_multiplier, max_risk_pct_input, default_period)
 
 if results:
     df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']]
@@ -722,8 +686,8 @@ if results:
 
     st.markdown(f"""
     <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
-        <h2 style="color: #00E676; margin: 0;">🏆 TOP {style_key.upper()} PICK: {winner_ticker} ({winner_setup['Leverage']} Mode)</h2>
-        <p style="font-size: 15px; color: #CCCCCC;"><b>Pattern Detected:</b> {winner_info['Pattern']} | <b>Score:</b> {winner_info['Score']}/50 | <b>Target Ratio:</b> {winner_setup['RR_Ratio']}</p>
+        <h2 style="color: #00E676; margin: 0;">🏆 TOP ALGO PICK: {winner_ticker} ({winner_setup['Leverage']} Mode)</h2>
+        <p style="font-size: 15px; color: #CCCCCC;"><b>Pattern Detected:</b> {winner_info['Pattern']} | <b>Score:</b> {winner_info['Score']}/50 | <b>Risk-Reward Ratio:</b> 1:2.0</p>
         <hr style="border-color: #333;">
         <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
             <div><b>Entry Price:</b> ₹{winner_setup['Entry']}</div>
@@ -736,15 +700,15 @@ if results:
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs([f"🔥 Top {style_key} Picks", "📊 Full Screener"])
+    tab1, tab2 = st.tabs(["🔥 Preferred Buy Candidates", "📊 Full Screener"])
     
     with tab1:
-        st.subheader(f"🔥 Top Recommended {style_key} Trades")
+        st.subheader("🔥 Top High-Conviction Breakouts")
         buy_picks = sorted_df[(sorted_df['Preferred_Buy'] == True) | (sorted_df['Score'] >= 40)]
         if not buy_picks.empty:
             st.dataframe(buy_picks[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'RSI', 'RVOL']], use_container_width=True)
         else:
-            st.info("No stocks currently meet the strict breakout criteria for this mode.")
+            st.info("No stocks currently meet strict 4-indicator breakout alignment.")
 
     with tab2:
         st.subheader("📊 Stock Universe Screener")
@@ -768,16 +732,16 @@ if results:
             st.write(f"**RVOL:** {stock_info['RVOL']}x")
             st.write(f"**14-Day ATR:** ₹{stock_info['ATR']}")
         with col3:
-            st.markdown(f"### Execution Plan ({style_key})")
+            st.markdown("### Execution Plan")
             setup = stock_info['Setup']
             st.write(f"**Entry:** ₹{setup['Entry']}")
             st.write(f"**Stop Loss:** ₹{setup['Stop Loss']} (-{setup['SL_Pct']}%)")
-            st.write(f"**Target ({setup['RR_Ratio']} R:R):** ₹{setup['Target']}")
+            st.write(f"**Target (1:2 R:R):** ₹{setup['Target']}")
             st.write(f"**Quantity:** {setup['Shares to Buy']} Shares")
             st.write(f"**Capital Needed:** ₹{setup['Margin Required']:,}")
             st.write(f"**Max Loss Risk:** ₹{setup['Max Rupee Risk']}")
         st.markdown("---")
-        st.plotly_chart(render_candlestick_chart(df_stock, selected_stock, style_name=style_key), use_container_width=True)'''
+        st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)'''
 }
 
 for path, content in files.items():
@@ -787,4 +751,4 @@ for path, content in files.items():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-print("✅ SUCCESS: Added horizon-specific scoring models!")
+print("✅ SUCCESS: Reverted to previous codebase!")
