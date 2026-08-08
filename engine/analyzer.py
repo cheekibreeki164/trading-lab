@@ -1,7 +1,7 @@
 import pandas as pd
 
 def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
-    if df.empty or len(df) < 15:
+    if df.empty or len(df) < 10:
         return {}
     
     latest = df.iloc[-1]
@@ -17,6 +17,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     close_price = safe_float(latest['Close'])
     sma20 = safe_float(latest.get('SMA20', close_price))
     sma50 = safe_float(latest.get('SMA50', close_price))
+    sma200 = safe_float(latest.get('SMA200', close_price))
     vwap = safe_float(latest.get('VWAP', close_price))
     rsi = safe_float(latest.get('RSI', 50))
     rvol = safe_float(latest.get('RVOL', 1.0))
@@ -38,6 +39,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
         "Daily_Change": round(daily_change, 2),
         "SMA20": round(sma20, 2),
         "SMA50": round(sma50, 2),
+        "SMA200": round(sma200, 2),
         "VWAP": round(vwap, 2),
         "RSI": round(rsi, 2),
         "ATR": round(atr, 2),

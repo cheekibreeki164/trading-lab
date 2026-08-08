@@ -16,6 +16,8 @@ def render_candlestick_chart(df: pd.DataFrame, ticker: str, style_name: str = "I
         fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name="SMA 20", line=dict(color='orange', width=1.5)), row=1, col=1)
     if 'SMA50' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name="SMA 50", line=dict(color='blue', width=1.5)), row=1, col=1)
+    if 'SMA200' in df.columns and style_name == "Long-Term":
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA200'], name="SMA 200", line=dict(color='white', width=2)), row=1, col=1)
     if 'VWAP' in df.columns and style_name == "Intraday":
         fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], name="VWAP", line=dict(color='yellow', width=2, dash='dot')), row=1, col=1)
 

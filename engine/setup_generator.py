@@ -5,7 +5,6 @@ def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.
             "Shares to Buy": 0, "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x", "SL_Pct": 0, "RR_Ratio": "1:2"
         }
 
-    # Style Configurations
     if trade_style == "Intraday":
         sl_atr_mult = 1.0
         rr_ratio = 2.0
@@ -19,13 +18,11 @@ def generate_trade_setup(price: float, atr: float, total_capital: float = 10000.
     effective_capital = total_capital * leverage
     max_rupee_risk = round(total_capital * max_risk_pct, 2)
     
-    # Calculate Risk-based Position Sizing
     risk_per_share = atr * sl_atr_mult if atr > 0 else price * 0.02
     
     shares_by_risk = int(max_rupee_risk // risk_per_share) if risk_per_share > 0 else 1
     shares_by_capital = int(effective_capital // price)
     
-    # Position size is constrained by whichever limit is stricter
     shares_to_buy = min(shares_by_risk, shares_by_capital)
     if shares_to_buy < 1:
         shares_to_buy = 1

@@ -340,7 +340,7 @@ def fetch_batch_market_data(tickers: list, period: str = "6mo") -> dict:
                 try:
                     if ticker in data.columns.levels[0]:
                         df = data[ticker].dropna()
-                        if not df.empty and len(df) >= 20:
+                        if not df.empty and len(df) >= 15:
                             stock_dfs[ticker] = df
                 except Exception:
                     continue
@@ -356,7 +356,7 @@ import numpy as np
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     
-    df['SMA20'] = df['Close'].rolling(window=20).mean()
+    df['SMA20'] = df['Close'].rolling(window=min(20, len(df))).mean()
     df['SMA50'] = df['Close'].rolling(window=min(50, len(df))).mean()
     df['SMA200'] = df['Close'].rolling(window=min(200, len(df))).mean()
     
@@ -364,8 +364,8 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
     
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=min(14, len(df))).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=min(14, len(df))).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
@@ -378,9 +378,9 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     high_close = (df['High'] - df['Close'].shift()).abs()
     low_close = (df['Low'] - df['Close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df['ATR'] = tr.rolling(window=14).mean()
+    df['ATR'] = tr.rolling(window=min(14, len(df))).mean()
     
-    df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
+    df['Vol_SMA20'] = df['Volume'].rolling(window=min(20, len(df))).mean()
     df['RVOL'] = df['Volume'] / df['Vol_SMA20']
     
     df['Daily_Change_Pct'] = df['Close'].pct_change() * 100
@@ -390,7 +390,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     "engine/patterns.py": '''import pandas as pd
 
 def detect_chart_patterns(df: pd.DataFrame) -> dict:
-    if df.empty or len(df) < 15:
+    if df.empty or len(df) < 10:
         return {"Pattern": "None", "Pattern_Score": 0}
     
     recent = df.tail(10)
@@ -420,7 +420,7 @@ def detect_chart_patterns(df: pd.DataFrame) -> dict:
     "engine/analyzer.py": '''import pandas as pd
 
 def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
-    if df.empty or len(df) < 15:
+    if df.empty or len(df) < 10:
         return {}
     
     latest = df.iloc[-1]
@@ -436,6 +436,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     close_price = safe_float(latest['Close'])
     sma20 = safe_float(latest.get('SMA20', close_price))
     sma50 = safe_float(latest.get('SMA50', close_price))
+    sma200 = safe_float(latest.get('SMA200', close_price))
     vwap = safe_float(latest.get('VWAP', close_price))
     rsi = safe_float(latest.get('RSI', 50))
     rvol = safe_float(latest.get('RVOL', 1.0))
@@ -457,6 +458,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
         "Daily_Change": round(daily_change, 2),
         "SMA20": round(sma20, 2),
         "SMA50": round(sma50, 2),
+        "SMA200": round(sma200, 2),
         "VWAP": round(vwap, 2),
         "RSI": round(rsi, 2),
         "ATR": round(atr, 2),
@@ -468,49 +470,42 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     "engine/scoring.py": '''from engine.patterns import detect_chart_patterns
 import pandas as pd
 
-def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
+def score_market_condition(data: dict, df: pd.DataFrame = None, trade_style: str = "Intraday") -> dict:
     if not data or 'Price' not in data or data['Price'] is None:
         return {"total": 0, "status": "NO DATA", "breakdown": {}, "pattern": "None"}
     
     scores = {}
+    price = data['Price']
     
-    if data['Price'] > data['SMA20'] and data['Price'] > data.get('VWAP', 0):
-        scores['Trend'] = 10
-    elif data['Price'] > data['SMA20']:
-        scores['Trend'] = 6
-    else:
-        scores['Trend'] = 2
+    if trade_style == "Intraday":
+        # Intraday prioritizes RVOL, VWAP, and short-term volatility/momentum
+        scores['VWAP_Reclaim'] = 12 if price > data.get('VWAP', 0) else 3
+        scores['RVOL_Surge'] = 12 if data['RVOL'] >= 1.5 else (8 if data['RVOL'] >= 1.1 else 2)
+        scores['RSI_Momentum'] = 10 if 55 <= data['RSI'] <= 75 else 4
+        scores['Short_Trend'] = 10 if price > data['SMA20'] else 3
+        scores['MACD_Bull'] = 6 if data.get('MACD_Bullish', False) else 2
         
-    if 55 <= data['RSI'] <= 70:
-        scores['Momentum'] = 10
-    elif 45 <= data['RSI'] < 55:
-        scores['Momentum'] = 7
-    else:
-        scores['Momentum'] = 3
-        
-    if data['RVOL'] >= 1.5:
-        scores['Volume'] = 10
-    elif data['RVOL'] >= 1.0:
-        scores['Volume'] = 6
-    else:
-        scores['Volume'] = 2
-        
-    atr_pct = (data['ATR'] / data['Price']) * 100 if data['Price'] > 0 else 0
-    if atr_pct <= 3.0:
-        scores['Risk'] = 10
-    elif atr_pct <= 5.0:
-        scores['Risk'] = 6
-    else:
-        scores['Risk'] = 3
-        
-    scores['MACD'] = 10 if data.get('MACD_Bullish', False) else 4
-    
+    elif trade_style == "Swing Trade":
+        # Swing prioritizes 20/50 SMA trend, MACD alignment, and sustainable RSI
+        scores['Trend_20_50'] = 15 if price > data['SMA20'] > data['SMA50'] else (8 if price > data['SMA20'] else 2)
+        scores['MACD_Structure'] = 12 if data.get('MACD_Bullish', False) else 3
+        scores['RSI_Health'] = 10 if 50 <= data['RSI'] <= 68 else 4
+        scores['Volume_Support'] = 8 if data['RVOL'] >= 1.1 else 3
+        scores['ATR_Risk'] = 5 if (data['ATR']/price)*100 <= 4.0 else 2
+
+    else:  # Long-Term
+        # Long-term prioritizes 200 SMA alignment, lower ATR volatility, and valuation safety
+        scores['Trend_200SMA'] = 18 if price > data.get('SMA200', price) else 2
+        scores['Trend_50SMA'] = 12 if price > data['SMA50'] else 4
+        scores['Low_Volatility'] = 10 if (data['ATR']/price)*100 <= 3.0 else 4
+        scores['RSI_Value'] = 10 if 40 <= data['RSI'] <= 62 else 3
+
     pattern_info = detect_chart_patterns(df) if df is not None else {"Pattern": "N/A", "Pattern_Score": 0}
     
     total_score = sum(scores.values()) + pattern_info['Pattern_Score']
     total_score = min(total_score, 50)
     
-    if data.get('Preferred_Buy', False) or total_score >= 42:
+    if total_score >= 42:
         status = "MUST BUY 🔥"
     elif total_score >= 32:
         status = "WATCH 👁️"
@@ -531,7 +526,6 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
             "Shares to Buy": 0, "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x", "SL_Pct": 0, "RR_Ratio": "1:2"
         }
 
-    # Style Configurations
     if trade_style == "Intraday":
         sl_atr_mult = 1.0
         rr_ratio = 2.0
@@ -545,13 +539,11 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
     effective_capital = total_capital * leverage
     max_rupee_risk = round(total_capital * max_risk_pct, 2)
     
-    # Calculate Risk-based Position Sizing
     risk_per_share = atr * sl_atr_mult if atr > 0 else price * 0.02
     
     shares_by_risk = int(max_rupee_risk // risk_per_share) if risk_per_share > 0 else 1
     shares_by_capital = int(effective_capital // price)
     
-    # Position size is constrained by whichever limit is stricter
     shares_to_buy = min(shares_by_risk, shares_by_capital)
     if shares_to_buy < 1:
         shares_to_buy = 1
@@ -595,6 +587,8 @@ def render_candlestick_chart(df: pd.DataFrame, ticker: str, style_name: str = "I
         fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name="SMA 20", line=dict(color='orange', width=1.5)), row=1, col=1)
     if 'SMA50' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name="SMA 50", line=dict(color='blue', width=1.5)), row=1, col=1)
+    if 'SMA200' in df.columns and style_name == "Long-Term":
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA200'], name="SMA 200", line=dict(color='white', width=2)), row=1, col=1)
     if 'VWAP' in df.columns and style_name == "Intraday":
         fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], name="VWAP", line=dict(color='yellow', width=2, dash='dot')), row=1, col=1)
 
@@ -629,7 +623,6 @@ trade_style = st.sidebar.radio(
     index=0
 )
 
-# Dynamic defaults based on mode
 if "Intraday" in trade_style:
     style_key = "Intraday"
     default_period = "1mo"
@@ -674,7 +667,6 @@ st.sidebar.header("⚙️ Configuration & Filters")
 universe = load_stock_universe()
 min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 30)
 
-# Header Bar
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 st.title(f"⚡ Medhansh TradingLab — {style_key} Mode")
 st.caption(f"🟢 **MODE:** `{style_key.upper()}` | Last Update: `{now_str}` | Auto Refresh: `{refresh_seconds}s` | Fetch Period: `{default_period}`")
@@ -688,7 +680,7 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
         try:
             df_ind = compute_indicators(df)
             condition = extract_latest_condition(df_ind, ticker)
-            scores = score_market_condition(condition, df_ind)
+            scores = score_market_condition(condition, df_ind, trade_style=current_style)
             setup = generate_trade_setup(
                 condition.get('Price', 0), 
                 condition.get('ATR', 0), 
@@ -795,4 +787,4 @@ for path, content in files.items():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-print("✅ SUCCESS: Trading mode switch (Intraday / Swing / Long-Term) implemented!")
+print("✅ SUCCESS: Added horizon-specific scoring models!")

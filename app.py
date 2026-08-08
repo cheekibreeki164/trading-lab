@@ -19,7 +19,6 @@ trade_style = st.sidebar.radio(
     index=0
 )
 
-# Dynamic defaults based on mode
 if "Intraday" in trade_style:
     style_key = "Intraday"
     default_period = "1mo"
@@ -64,7 +63,6 @@ st.sidebar.header("⚙️ Configuration & Filters")
 universe = load_stock_universe()
 min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 30)
 
-# Header Bar
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 st.title(f"⚡ Medhansh TradingLab — {style_key} Mode")
 st.caption(f"🟢 **MODE:** `{style_key.upper()}` | Last Update: `{now_str}` | Auto Refresh: `{refresh_seconds}s` | Fetch Period: `{default_period}`")
@@ -78,7 +76,7 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
         try:
             df_ind = compute_indicators(df)
             condition = extract_latest_condition(df_ind, ticker)
-            scores = score_market_condition(condition, df_ind)
+            scores = score_market_condition(condition, df_ind, trade_style=current_style)
             setup = generate_trade_setup(
                 condition.get('Price', 0), 
                 condition.get('ATR', 0), 
