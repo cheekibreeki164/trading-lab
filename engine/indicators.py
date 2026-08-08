@@ -4,15 +4,16 @@ import numpy as np
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     
-    df['SMA20'] = df['Close'].rolling(window=min(20, len(df))).mean()
+    df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=min(50, len(df))).mean()
+    df['SMA200'] = df['Close'].rolling(window=min(200, len(df))).mean()
     
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
     
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=min(14, len(df))).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=min(14, len(df))).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
@@ -25,9 +26,9 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     high_close = (df['High'] - df['Close'].shift()).abs()
     low_close = (df['Low'] - df['Close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df['ATR'] = tr.rolling(window=min(14, len(df))).mean()
+    df['ATR'] = tr.rolling(window=14).mean()
     
-    df['Vol_SMA20'] = df['Volume'].rolling(window=min(20, len(df))).mean()
+    df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
     df['RVOL'] = df['Volume'] / df['Vol_SMA20']
     
     df['Daily_Change_Pct'] = df['Close'].pct_change() * 100

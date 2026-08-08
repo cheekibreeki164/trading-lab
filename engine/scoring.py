@@ -6,21 +6,44 @@ def score_market_condition(data: dict, df: pd.DataFrame = None) -> dict:
         return {"total": 0, "status": "NO DATA", "breakdown": {}, "pattern": "None"}
     
     scores = {}
-    price = data['Price']
     
-    scores['Trend_SMA20'] = 10 if price > data['SMA20'] else 2
-    scores['Trend_SMA50'] = 8 if price > data['SMA50'] else 2
-    scores['VWAP_Reclaim'] = 10 if price > data.get('VWAP', 0) else 2
-    scores['RSI_Momentum'] = 10 if 55 <= data['RSI'] <= 70 else (5 if 40 <= data['RSI'] < 55 else 2)
-    scores['RVOL_Surge'] = 10 if data['RVOL'] >= 1.5 else (6 if data['RVOL'] >= 1.1 else 2)
-    scores['MACD_Bull'] = 7 if data.get('MACD_Bullish', False) else 2
+    if data['Price'] > data['SMA20'] and data['Price'] > data.get('VWAP', 0):
+        scores['Trend'] = 10
+    elif data['Price'] > data['SMA20']:
+        scores['Trend'] = 6
+    else:
+        scores['Trend'] = 2
+        
+    if 55 <= data['RSI'] <= 70:
+        scores['Momentum'] = 10
+    elif 45 <= data['RSI'] < 55:
+        scores['Momentum'] = 7
+    else:
+        scores['Momentum'] = 3
+        
+    if data['RVOL'] >= 1.5:
+        scores['Volume'] = 10
+    elif data['RVOL'] >= 1.0:
+        scores['Volume'] = 6
+    else:
+        scores['Volume'] = 2
+        
+    atr_pct = (data['ATR'] / data['Price']) * 100 if data['Price'] > 0 else 0
+    if atr_pct <= 3.0:
+        scores['Risk'] = 10
+    elif atr_pct <= 5.0:
+        scores['Risk'] = 6
+    else:
+        scores['Risk'] = 3
+        
+    scores['MACD'] = 10 if data.get('MACD_Bullish', False) else 4
     
     pattern_info = detect_chart_patterns(df) if df is not None else {"Pattern": "N/A", "Pattern_Score": 0}
     
     total_score = sum(scores.values()) + pattern_info['Pattern_Score']
     total_score = min(total_score, 50)
     
-    if total_score >= 42:
+    if data.get('Preferred_Buy', False) or total_score >= 42:
         status = "MUST BUY 🔥"
     elif total_score >= 32:
         status = "WATCH 👁️"

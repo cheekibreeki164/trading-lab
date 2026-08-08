@@ -1,7 +1,7 @@
 import pandas as pd
 
 def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
-    if df.empty or len(df) < 10:
+    if df.empty or len(df) < 15:
         return {}
     
     latest = df.iloc[-1]
