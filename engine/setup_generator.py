@@ -1,17 +1,13 @@
 def generate_daytrade_setup(price: float, atr: float, total_capital: float = 10000.0, leverage: float = 1.0, max_risk_pct: float = 0.02, rr_ratio: float = 2.0) -> dict:
-    """
-    Max Buying Power Position Sizer with Dynamic Stop Loss capped at 2% Total Cash Balance Risk
-    """
     if not price or price <= 0:
         return {
             "Entry": 0, "Stop Loss": 0, "Target": 0, "Max Rupee Risk": 0, 
-            "Shares to Buy": 0, "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x"
+            "Shares to Buy": 0, "Total Position Value": 0, "Margin Required": 0, "Leverage": f"{leverage}x", "SL_Pct": 0
         }
         
     effective_capital = total_capital * leverage
     max_rupee_risk = round(total_capital * max_risk_pct, 2)
     
-    # 1. Buy maximum shares possible with 5x leverage
     shares_to_buy = int(effective_capital // price)
     if shares_to_buy == 0:
         shares_to_buy = 1
@@ -19,7 +15,6 @@ def generate_daytrade_setup(price: float, atr: float, total_capital: float = 100
     total_trade_value = round(shares_to_buy * price, 2)
     margin_required = round(total_trade_value / leverage, 2)
     
-    # 2. Dynamic Stop Loss Price per share so total loss == 2% of Cash Balance
     risk_per_share = max_rupee_risk / shares_to_buy
     stop_loss = round(price - risk_per_share, 2)
     target = round(price + (risk_per_share * rr_ratio), 2)

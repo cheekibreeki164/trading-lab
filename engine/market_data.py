@@ -1,9 +1,10 @@
 import yfinance as yf
 import pandas as pd
 
-def fetch_batch_market_data(tickers: list, period: str = "6mo") -> dict:
+def fetch_batch_market_data(tickers: list) -> dict:
     try:
-        data = yf.download(tickers, period=period, group_by='ticker', threads=True, progress=False)
+        # Download 5-day history with 1-minute interval for live price updates
+        data = yf.download(tickers, period="5d", interval="1m", group_by='ticker', threads=True, progress=False)
         stock_dfs = {}
         
         if len(tickers) == 1:
@@ -18,7 +19,7 @@ def fetch_batch_market_data(tickers: list, period: str = "6mo") -> dict:
                 try:
                     if ticker in data.columns.levels[0]:
                         df = data[ticker].dropna()
-                        if not df.empty and len(df) >= 50:
+                        if not df.empty and len(df) >= 15:
                             stock_dfs[ticker] = df
                 except Exception:
                     continue

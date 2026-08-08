@@ -1,7 +1,7 @@
 import pandas as pd
 
 def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
-    if df.empty or len(df) < 50:
+    if df.empty or len(df) < 15:
         return {}
     
     latest = df.iloc[-1]
@@ -12,20 +12,20 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
         return float(val)
 
     close_price = safe_float(latest['Close'])
-    sma20 = safe_float(latest['SMA20'])
-    sma50 = safe_float(latest['SMA50'])
-    vwap = safe_float(latest['VWAP'])
-    rsi = safe_float(latest['RSI'])
-    rvol = safe_float(latest['RVOL'])
-    atr = safe_float(latest['ATR'])
-    macd = safe_float(latest['MACD'])
-    macd_sig = safe_float(latest['MACD_Signal'])
-    daily_change = safe_float(latest['Daily_Change_Pct'])
+    sma20 = safe_float(latest['SMA20']) if pd.notna(latest['SMA20']) else close_price
+    sma50 = safe_float(latest['SMA50']) if pd.notna(latest['SMA50']) else close_price
+    vwap = safe_float(latest['VWAP']) if pd.notna(latest['VWAP']) else close_price
+    rsi = safe_float(latest['RSI']) if pd.notna(latest['RSI']) else 50.0
+    rvol = safe_float(latest['RVOL']) if pd.notna(latest['RVOL']) else 1.0
+    atr = safe_float(latest['ATR']) if pd.notna(latest['ATR']) else close_price * 0.01
+    macd = safe_float(latest['MACD']) if pd.notna(latest['MACD']) else 0.0
+    macd_sig = safe_float(latest['MACD_Signal']) if pd.notna(latest['MACD_Signal']) else 0.0
+    daily_change = safe_float(latest['Daily_Change_Pct']) if pd.notna(latest['Daily_Change_Pct']) else 0.0
     
     is_macd_bullish = macd > macd_sig
-    is_trend_bullish = close_price > sma20 > sma50 and close_price > vwap
-    is_momentum_hot = 55 <= rsi <= 72
-    is_volume_breakout = rvol >= 1.3
+    is_trend_bullish = close_price > vwap and close_price > sma20
+    is_momentum_hot = 50 <= rsi <= 75
+    is_volume_breakout = rvol >= 1.1
     
     is_buy_candidate = is_trend_bullish and is_momentum_hot and is_volume_breakout and is_macd_bullish
 
