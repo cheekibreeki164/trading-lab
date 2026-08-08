@@ -33,4 +33,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
     df['RVOL'] = df['Volume'] / df['Vol_SMA20']
     
+    # Daily Change %
+    df['Daily_Change_Pct'] = df['Close'].pct_change() * 100
+    
     return df

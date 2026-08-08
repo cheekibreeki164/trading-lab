@@ -540,7 +540,6 @@ st.sidebar.info(f"Market Universe: **{len(universe)}** Stocks")
 min_score = st.sidebar.slider("Minimum TradingLab Score:", 0, 50, 30)
 scan_button = st.sidebar.button("⚡ Lock In Today's Scan", type="primary")
 
-# Cache set for 12 hours so the "Winner of the Day" remains stable throughout trading hours
 @st.cache_data(ttl=43200)
 def run_pipeline(ticker_list):
     results, chart_dfs = {}, {}
@@ -580,7 +579,6 @@ results, chart_dfs = st.session_state.results, st.session_state.chart_dfs
 if results:
     df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']]
     
-    # Stable Winner Pick Algorithm (Highest Score -> Highest RVOL -> Highest 1D Change %)
     sorted_df = df_all.sort_values(by=['Score', 'RVOL', '1D Change %'], ascending=[False, False, False])
     
     winner_ticker = sorted_df.index[0]
@@ -590,7 +588,7 @@ if results:
     # BANNER: TOP WINNER OF THE DAY
     st.markdown(f"""
     <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
-        <h2 style="color: #00E676; margin-0;">🏆 OFFICIAL WINNER OF THE DAY: {winner_ticker}</h2>
+        <h2 style="color: #00E676; margin: 0;">🏆 OFFICIAL WINNER OF THE DAY: {winner_ticker}</h2>
         <p style="font-size: 16px; color: #CCCCCC;">Highest conviction stock selected based on maximum TradingLab Score, volume surge, and trend momentum.</p>
         <hr style="border-color: #333;">
         <div style="display: flex; justify-content: space-between; flex-wrap: wrap;">
@@ -601,7 +599,7 @@ if results:
             <div><b>Stop Loss:</b> ₹{winner_setup['Stop Loss']}</div>
         </div>
     </div>
-    """, unsafe_allowed_click=True)
+    """, unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["🔥 Top Buy Picks", "📊 Full Market Screener"])
     
@@ -650,4 +648,4 @@ for path, content in files.items():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-print("✅ Upgraded TradingLab to include 'Winner of the Day' locking!")
+print("✅ Fixed unsafe_allow_html argument!")

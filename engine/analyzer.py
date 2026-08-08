@@ -5,7 +5,6 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
         return {}
     
     latest = df.iloc[-1]
-    prev = df.iloc[-2]
     
     def safe_float(val):
         if hasattr(val, 'item'):
@@ -20,8 +19,8 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     atr = safe_float(latest['ATR'])
     macd = safe_float(latest['MACD'])
     macd_sig = safe_float(latest['MACD_Signal'])
+    daily_change = safe_float(latest['Daily_Change_Pct'])
     
-    # Signal Logic
     is_macd_bullish = macd > macd_sig
     is_trend_bullish = close_price > sma20 > sma50
     is_momentum_hot = 55 <= rsi <= 72
@@ -32,6 +31,7 @@ def extract_latest_condition(df: pd.DataFrame, ticker: str) -> dict:
     return {
         "Ticker": ticker,
         "Price": round(close_price, 2),
+        "Daily_Change": round(daily_change, 2),
         "SMA20": round(sma20, 2),
         "SMA50": round(sma50, 2),
         "RSI": round(rsi, 2),
