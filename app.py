@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import datetime
-from streamlit_autorefresh import st_autorefresh
 from engine.data_loader import load_stock_universe
 from engine.market_data import fetch_batch_market_data
 from engine.indicators import compute_indicators
@@ -25,15 +24,15 @@ trade_style = st.sidebar.radio(
 
 if "Intraday" in trade_style:
     default_period = "1mo"
-    default_risk = 1.5
+    default_risk = 2.0
     default_lev = "5x (Intraday MIS Leverage)"
 elif "Swing" in trade_style:
     default_period = "6mo"
-    default_risk = 2.5
+    default_risk = 2.0
     default_lev = "1x (Cash Delivery)"
 else:
     default_period = "2y"
-    default_risk = 3.5
+    default_risk = 3.0
     default_lev = "1x (Cash Delivery)"
 
 st.sidebar.header("🛡️ Capital & Risk Management")
@@ -41,18 +40,19 @@ capital = st.sidebar.number_input("Total Cash Balance (₹):", min_value=500.0, 
 max_risk_pct_input = st.sidebar.slider("Max Balance Risk Per Trade (%):", 0.5, 5.0, default_risk, 0.5) / 100.0
 
 if market_mode == "Equity Spot (Shares)":
-    leverage_option = st.sidebar.radio("Leverage Mode:", ["1x (Cash Delivery)", "5x (Intraday MIS Leverage)"], index=0 if "1x" in default_lev else 1)
+    leverage_option = st.sidebar.radio("Leverage Mode:", ["1x (Cash Delivery)", "5x (Intraday MIS Leverage)"], index=1 if "5x" in default_lev else 0)
     leverage_multiplier = 5.0 if "5x" in leverage_option else 1.0
+    buying_power = capital * leverage_multiplier
 else:
     leverage_multiplier = 1.0
+    buying_power = capital
     option_strike_mode = st.sidebar.radio("Option Moneyness:", ["ATM (At-The-Money)", "ITM (In-The-Money)"])
     strike_type = "ITM" if "ITM" in option_strike_mode else "ATM"
 
-buying_power = capital * leverage_multiplier
 max_risk_rupees = capital * max_risk_pct_input
 
-st.sidebar.info(f"💰 **Purchasing Power:** ₹{buying_power:,.2f}")
-st.sidebar.warning(f"🛑 **Target Max Loss Capped At:** ₹{max_risk_rupees:,.2f} ({max_risk_pct_input*100:.1f}%)")
+st.sidebar.info(f"💰 **Buying / Capital Allocated:** ₹{buying_power:,.2f}")
+st.sidebar.warning(f"🛑 **Max Rupee Loss Capped At:** ₹{max_risk_rupees:,.2f} ({max_risk_pct_input*100:.1f}%)")
 
 st.sidebar.header("⚙️ Configuration & Filters")
 universe = load_stock_universe()
@@ -60,7 +60,7 @@ min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 30)
 
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 st.title(f"⚡ Medhansh TradingLab — {market_mode}")
-st.caption(f"🟢 **SYSTEM ONLINE** | Last Update: `{now_str}` | Fetch Period: `{default_period}`")
+st.caption(f"🟢 **SYSTEM ONLINE** | Last Update: `{now_str}` | Mode: `{market_mode}`")
 
 @st.cache_data(ttl=20)
 def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback, mode):
@@ -84,8 +84,9 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
             else:
                 opt_type = "CE" if condition.get('Daily_Change', 0) >= 0 else "PE"
                 setup = generate_option_setup(
-                    condition.get('Price', 0),
-                    condition.get('ATR', 0),
+                    symbol=ticker,
+                    spot_price=condition.get('Price', 0),
+                    atr=condition.get('ATR', 0),
                     capital=capital_input,
                     max_risk_pct=risk_pct,
                     option_type=opt_type,
@@ -111,7 +112,6 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
 
     return results, chart_dfs
 
-# Execute pipeline
 results, chart_dfs = run_pipeline(universe, capital, leverage_multiplier, max_risk_pct_input, default_period, market_mode)
 
 if results:
@@ -132,8 +132,8 @@ if results:
                 <div><b>Entry Price:</b> ₹{winner_setup['Entry']}</div>
                 <div><b>Stop Loss ({winner_setup['SL_Pct']}% Drop):</b> <span style="color:#FF5252;">₹{winner_setup['Stop Loss']}</span></div>
                 <div><b>Target Price:</b> <span style="color:#00E676;">₹{winner_setup['Target']}</span></div>
-                <div><b>Position Size:</b> {winner_setup['Shares to Buy']} Shares</div>
-                <div><b>Capital Needed:</b> ₹{winner_setup['Margin Required']:,}</div>
+                <div><b>Shares to Buy:</b> <span style="color:#00E676; font-size:18px;"><b>{winner_setup['Shares to Buy']} Shares</b></span></div>
+                <div><b>Margin Required:</b> ₹{winner_setup['Margin Required']:,}</div>
                 <div><b>Max Loss Risk:</b> ₹{winner_setup['Max Rupee Risk']}</div>
             </div>
         </div>
@@ -141,15 +141,16 @@ if results:
     else:
         st.markdown(f"""
         <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
-            <h2 style="color: #00E676; margin: 0;">🎯 TOP OPTION TRADE: {winner_ticker} {winner_setup['Instrument']}</h2>
-            <p style="font-size: 15px; color: #CCCCCC;"><b>Spot Price:</b> ₹{winner_info['Price']} | <b>Score:</b> {winner_info['Score']}/50 | <b>Lots:</b> {winner_setup['Lots']} Lot ({winner_setup['Total Qty']} Qty)</p>
+            <h2 style="color: #00E676; margin: 0;">🎯 TOP FnO OPTION PICK: {winner_ticker} {winner_setup['Instrument']}</h2>
+            <p style="font-size: 15px; color: #CCCCCC;"><b>Stock Spot Price:</b> ₹{winner_info['Price']} | <b>Lot Size:</b> {winner_setup['Lot Size']} Qty/Lot</p>
             <hr style="border-color: #333;">
             <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-                <div><b>Est. Entry Premium:</b> ₹{winner_setup['Est. Premium']}</div>
+                <div><b>Est. Option Premium:</b> ₹{winner_setup['Est. Premium']}</div>
                 <div><b>Premium Stop Loss:</b> <span style="color:#FF5252;">₹{winner_setup['Option SL']}</span></div>
                 <div><b>Premium Target:</b> <span style="color:#00E676;">₹{winner_setup['Option Target']}</span></div>
-                <div><b>Capital Required:</b> ₹{winner_setup['Premium Required']:,}</div>
-                <div><b>Max Risk:</b> ₹{winner_setup['Max Rupee Risk']} ({winner_setup['Risk Pct']}%)</div>
+                <div><b>Lots to Buy:</b> <span style="color:#00E676; font-size:18px;"><b>{winner_setup['Lots']} Lot ({winner_setup['Total Qty']} Qty)</b></span></div>
+                <div><b>Capital Allocated:</b> ₹{winner_setup['Premium Required']:,}</div>
+                <div><b>Max Rupee Risk:</b> ₹{winner_setup['Max Rupee Risk']} ({winner_setup['Risk Pct']}%)</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -186,21 +187,22 @@ if results:
             st.write(f"**RVOL:** {stock_info['RVOL']}x")
             st.write(f"**14-Day ATR:** ₹{stock_info['ATR']}")
         with col3:
-            st.markdown(f"### {'Option Execution Plan' if market_mode != 'Equity Spot (Shares)' else 'Equity Plan'}")
+            st.markdown(f"### {'FnO Option Plan' if market_mode != 'Equity Spot (Shares)' else 'Equity Spot Plan'}")
             setup = stock_info['Setup']
             if market_mode == "Equity Spot (Shares)":
                 st.write(f"**Entry:** ₹{setup['Entry']}")
                 st.write(f"**Stop Loss:** ₹{setup['Stop Loss']} (-{setup['SL_Pct']}%)")
                 st.write(f"**Target:** ₹{setup['Target']}")
-                st.write(f"**Quantity:** {setup['Shares to Buy']} Shares")
+                st.write(f"**Position:** {setup['Shares to Buy']} Shares")
+                st.write(f"**Capital Needed:** ₹{setup['Margin Required']:,}")
             else:
                 st.write(f"**Contract:** {setup['Instrument']}")
                 st.write(f"**Est. Premium:** ₹{setup['Est. Premium']}")
                 st.write(f"**Option SL:** ₹{setup['Option SL']}")
                 st.write(f"**Option Target:** ₹{setup['Option Target']}")
-                st.write(f"**Position:** {setup['Lots']} Lot ({setup['Total Qty']} Qty)")
+                st.write(f"**Position:** {setup['Lots']} Lot ({setup['Total Qty']} Contracts)")
                 st.write(f"**Capital Needed:** ₹{setup['Premium Required']:,}")
-                st.write(f"**Max Rupee Loss:** ₹{setup['Max Rupee Risk']}")
+                st.write(f"**Max Rupee Risk:** ₹{setup['Max Rupee Risk']}")
         st.markdown("---")
         st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
 else:
