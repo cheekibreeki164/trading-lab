@@ -1,10 +1,19 @@
-import pandas as pd
-import os
-
-def load_stock_universe(file_path: str = "data/stocks.csv") -> list:
-    if not os.path.exists(file_path):
-        return ["RELIANCE.NS", "SBIN.NS", "HAL.NS", "TATAMOTORS.NS"]
-    df = pd.read_csv(file_path)
-    if "Ticker" in df.columns:
-        return df["Ticker"].dropna().unique().tolist()
-    return []
+def load_stock_universe():
+    # Includes major indices (^NSEI for NIFTY 50, ^NSEBANK for BANK NIFTY) + liquid FnO stock universe
+    return [
+        "^NSEI",         # NIFTY 50 Index
+        "^NSEBANK",      # BANK NIFTY Index
+        "RELIANCE.NS",
+        "TCS.NS",
+        "HDFCBANK.NS",
+        "ICICIBANK.NS",
+        "SBIN.NS",
+        "BHARTIARTL.NS",
+        "TATAMOTORS.NS",
+        "INFY.NS",
+        "HAL.NS",
+        "TATAINVEST.NS",
+        "AXISBANK.NS",
+        "LT.NS",
+        "MARUTI.NS"
+    ]
