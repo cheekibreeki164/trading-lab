@@ -1,5 +1,4 @@
 def load_stock_universe():
-    # Includes major indices (^NSEI for NIFTY 50, ^NSEBANK for BANK NIFTY) + liquid FnO stock universe
     return [
         "^NSEI",         # NIFTY 50 Index
         "^NSEBANK",      # BANK NIFTY Index
@@ -16,4 +15,13 @@ def load_stock_universe():
         "AXISBANK.NS",
         "LT.NS",
         "MARUTI.NS"
+    ]
+
+def load_mcx_universe():
+    return [
+        "GC=F",   # Gold (MCX Benchmark)
+        "SI=F",   # Silver (MCX Benchmark)
+        "CL=F",   # Crude Oil (MCX Benchmark)
+        "NG=F",   # Natural Gas (MCX Benchmark)
+        "HG=F"    # Copper (MCX Benchmark)
     ]
