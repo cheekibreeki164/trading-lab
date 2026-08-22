@@ -1,130 +1,172 @@
 import os
 
 files = {
-    "engine/data_loader.py": '''def load_stock_universe():
-    return [
-        "^NSEI",         # NIFTY 50 Index
-        "^NSEBANK",      # BANK NIFTY Index
-        "RELIANCE.NS",
-        "TCS.NS",
-        "HDFCBANK.NS",
-        "ICICIBANK.NS",
-        "SBIN.NS",
-        "BHARTIARTL.NS",
-        "TATAMOTORS.NS",
-        "INFY.NS",
-        "HAL.NS",
-        "TATAINVEST.NS",
-        "AXISBANK.NS",
-        "LT.NS",
-        "MARUTI.NS"
-    ]
+    "engine/options_engine.py": '''import math
+import numpy as np
+from scipy.stats import norm
 
-def load_mcx_universe():
-    return [
-        "GC=F",   # Gold (MCX Benchmark)
-        "SI=F",   # Silver (MCX Benchmark)
-        "CL=F",   # Crude Oil (MCX Benchmark)
-        "NG=F",   # Natural Gas (MCX Benchmark)
-        "HG=F"    # Copper (MCX Benchmark)
-    ]
-''',
-
-    "engine/mcx_engine.py": '''# MCX Lot sizes and contract specifications
-MCX_LOT_SIZES = {
-    "GC=F": 100,      # Gold Regular (100 grams / oz conversion proxy)
-    "SI=F": 30,       # Silver Regular (30 kg)
-    "CL=F": 100,      # Crude Oil (100 barrels)
-    "NG=F": 1250,     # Natural Gas (1250 mmBtu)
-    "HG=F": 2500      # Copper (2500 kg)
+# Exact Lot Sizes for major NSE F&O Stocks & Indices
+LOT_SIZES = {
+    "NIFTY": 25,
+    "BANKNIFTY": 15,
+    "FINNIFTY": 25,
+    "RELIANCE.NS": 250,
+    "TCS.NS": 175,
+    "HDFCBANK.NS": 550,
+    "ICICIBANK.NS": 700,
+    "SBIN.NS": 750,
+    "BHARTIARTL.NS": 475,
+    "TATAMOTORS.NS": 1425,
+    "INFY.NS": 400,
+    "HAL.NS": 300,
+    "TATAINVEST.NS": 100,
 }
 
-MCX_NAMES = {
-    "GC=F": "GOLD (MCX Futures)",
-    "SI=F": "SILVER (MCX Futures)",
-    "CL=F": "CRUDE OIL (MCX Futures)",
-    "NG=F": "NATURAL GAS (MCX Futures)",
-    "HG=F": "COPPER (MCX Futures)"
-}
+DEFAULT_LOT_SIZE = 250
 
-def analyze_mcx_trend(price: float, rsi: float, rvol: float, daily_change: float) -> dict:
-    if daily_change > 0.5 and rsi > 55:
-        bias = "BULLISH"
-        signal = "BUY FUTURES / CE"
-        strength = "STRONG UPWARD MOMENTUM"
-        color = "#00E676"
-    elif daily_change < -0.5 and rsi < 45:
-        bias = "BEARISH"
-        signal = "SELL FUTURES / BUY PE"
-        strength = "STRONG DOWNWARD MOMENTUM"
-        color = "#FF5252"
-    else:
-        bias = "SIDEWAYS"
-        signal = "WAIT / NO CLEAR TREND"
-        strength = "CONSOLIDATION"
-        color = "#FFB300"
+def black_scholes_merton(S: float, K: float, T: float, r: float, sigma: float, option_type: str = "CE") -> dict:
+    """
+    Calculates theoretical Option Premium and Delta using Black-Scholes-Merton model.
+    S: Spot Price
+    K: Strike Price
+    T: Time to Expiry (in years, e.g., 15/365)
+    r: Risk-free rate (e.g., 0.07 for 7%)
+    sigma: Volatility (annualized, e.g., 0.25 for 25%)
+    """
+    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
+        return {"premium": 0.0, "delta": 0.5, "d1": 0, "d2": 0}
+
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+
+    if option_type == "CE":
+        premium = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+        delta = norm.cdf(d1)
+    else:  # PE
+        premium = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        delta = norm.cdf(d1) - 1.0
 
     return {
-        "Bias": bias,
-        "Signal": signal,
-        "Strength": strength,
-        "Color": color
+        "premium": max(round(premium, 2), 0.5),
+        "delta": round(delta, 4),
+        "d1": round(d1, 4),
+        "d2": round(d2, 4)
     }
 
-def generate_mcx_setup(symbol: str, price: float, atr: float, capital: float, max_risk_pct: float) -> dict:
-    if not price or price <= 0:
+def round_to_strike(price: float, step: float = 50.0) -> float:
+    return round(price / step) * step
+
+def compute_historical_volatility(df, window: int = 30) -> float:
+    """Computes 30-day annualized historical volatility from close prices."""
+    if df is None or len(df) < 5:
+        return 0.25  # Fallback default volatility (25%)
+    
+    log_returns = np.log(df['Close'] / df['Close'].shift(1)).dropna()
+    daily_std = log_returns.tail(window).std()
+    
+    if np.isnan(daily_std) or daily_std <= 0:
+        return 0.25
+        
+    annualized_vol = daily_std * np.sqrt(252)
+    return float(annualized_vol)
+
+def generate_option_setup(
+    symbol: str, 
+    spot_price: float, 
+    atr: float, 
+    capital: float, 
+    max_risk_pct: float, 
+    df_history = None,
+    option_type: str = "CE", 
+    strike_mode: str = "ATM",
+    days_to_expiry: int = 15,
+    risk_free_rate: float = 0.07
+) -> dict:
+    if not spot_price or spot_price <= 0:
         return {}
+    
+    lot_size = LOT_SIZES.get(symbol, DEFAULT_LOT_SIZE)
+    
+    # 1. Determine Strike Step based on stock price
+    if spot_price < 500:
+        step = 10.0
+    elif spot_price < 1500:
+        step = 20.0
+    elif spot_price < 5000:
+        step = 50.0
+    else:
+        step = 100.0
 
-    lot_size = MCX_LOT_SIZES.get(symbol, 100)
-    display_name = MCX_NAMES.get(symbol, symbol)
+    atm_strike = round_to_strike(spot_price, step)
+    
+    if strike_mode == "ITM":
+        strike = atm_strike - step if option_type == "CE" else atm_strike + step
+    else:  # ATM
+        strike = atm_strike
 
-    # Calculate ATR-based Stop Loss and Target
-    sl_distance = round(atr * 1.5, 2) if atr > 0 else round(price * 0.01, 2)
-    sl_price = round(price - sl_distance, 2)
-    target_price = round(price + (sl_distance * 2.0), 2)
-
-    risk_per_unit = sl_distance
-    risk_per_lot = round(risk_per_unit * lot_size, 2)
-
-    target_rupee_risk = capital * max_risk_pct
-    lots_to_trade = int(target_rupee_risk // risk_per_lot) if risk_per_lot > 0 else 0
-    if lots_to_trade < 1:
-        lots_to_trade = 1
-
-    total_qty = lots_to_trade * lot_size
-    actual_rupee_risk = round(risk_per_unit * total_qty, 2)
+    # 2. Compute Volatility & Time to Expiry
+    sigma = compute_historical_volatility(df_history)
+    T = max(days_to_expiry, 1) / 365.0
+    
+    # 3. Apply Black-Scholes-Merton Engine
+    bsm_res = black_scholes_merton(S=spot_price, K=strike, T=T, r=risk_free_rate, sigma=sigma, option_type=option_type)
+    bsm_premium = bsm_res["premium"]
+    bsm_delta = abs(bsm_res["delta"])
+    
+    # 4. Lot sizing based on BSM calculated premium
+    cost_per_lot = bsm_premium * lot_size
+    lots_to_buy = int(capital // cost_per_lot) if cost_per_lot > 0 else 0
+    if lots_to_buy < 1:
+        lots_to_buy = 1
+        
+    total_quantity = lots_to_buy * lot_size
+    total_premium_required = round(total_quantity * bsm_premium, 2)
+    
+    # 5. Delta-Adjusted Account Risk Sizing (2% max account risk)
+    target_account_loss = capital * max_risk_pct
+    
+    # Premium drop required to hit exact rupee loss
+    premium_sl_drop = round(target_account_loss / total_quantity, 2) if total_quantity > 0 else 1.0
+    
+    option_sl_price = max(round(bsm_premium - premium_sl_drop, 2), 0.50)
+    option_target_price = round(bsm_premium + (premium_sl_drop * 2.0), 2)
+    
+    actual_rupee_risk = round(premium_sl_drop * total_quantity, 2)
     actual_risk_pct = round((actual_rupee_risk / capital) * 100, 2)
-
+    
     return {
-        "Instrument": display_name,
-        "Entry Price": price,
-        "Stop Loss": sl_price,
-        "Target": target_price,
+        "Instrument": f"{int(strike)} {option_type}",
+        "Strike": strike,
+        "Option Type": option_type,
+        "BSM Premium": bsm_premium,
+        "BSM Delta": bsm_delta,
+        "Ann. Volatility": round(sigma * 100, 2),
         "Lot Size": lot_size,
-        "Lots": lots_to_trade,
-        "Total Qty": total_qty,
-        "Risk Per Lot": risk_per_lot,
+        "Lots": lots_to_buy,
+        "Total Qty": total_quantity,
+        "Premium Required": total_premium_required,
+        "Option SL": option_sl_price,
+        "Option Target": option_target_price,
         "Max Rupee Risk": actual_rupee_risk,
         "Risk Pct": actual_risk_pct
-    }
-''',
+    }''',
 
     "app.py": '''import streamlit as st
 import pandas as pd
 import datetime
-from engine.data_loader import load_stock_universe, load_mcx_universe
+from engine.data_loader import load_stock_universe
 from engine.market_data import fetch_batch_market_data
 from engine.indicators import compute_indicators
 from engine.analyzer import extract_latest_condition
 from engine.scoring import score_market_condition
 from engine.setup_generator import generate_trade_setup
-from engine.options_engine import generate_option_setup, analyze_option_trend
-from engine.mcx_engine import analyze_mcx_trend, generate_mcx_setup, MCX_NAMES
+from engine.options_engine import generate_option_setup
 from components.charts import render_candlestick_chart
 
 st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
 
-market_mode = st.sidebar.selectbox("📈 Asset Class / Mode:", ["NSE Options (CE/PE Buying)", "Equity Spot (Shares)", "MCX Commodities"])
+# Sidebar - Mode Selection
+market_mode = st.sidebar.selectbox("📈 Asset Class / Mode:", ["Equity Spot (Shares)", "NSE Options (CE/PE Buying)"])
 
 st.sidebar.header("🎯 Trading Strategy Profiles")
 trade_style = st.sidebar.radio(
@@ -133,42 +175,46 @@ trade_style = st.sidebar.radio(
     index=0
 )
 
-default_period = "1mo" if "Intraday" in trade_style else ("6mo" if "Swing" in trade_style else "2y")
-default_risk = 2.0
+if "Intraday" in trade_style:
+    default_period = "1mo"
+    default_risk = 2.0
+    default_lev = "5x (Intraday MIS Leverage)"
+elif "Swing" in trade_style:
+    default_period = "6mo"
+    default_risk = 2.0
+    default_lev = "1x (Cash Delivery)"
+else:
+    default_period = "2y"
+    default_risk = 3.0
+    default_lev = "1x (Cash Delivery)"
 
 st.sidebar.header("🛡️ Capital & Risk Management")
 capital = st.sidebar.number_input("Total Cash Balance (₹):", min_value=500.0, value=4000.0, step=500.0)
 max_risk_pct_input = st.sidebar.slider("Max Balance Risk Per Trade (%):", 0.5, 5.0, default_risk, 0.5) / 100.0
 
 if market_mode == "Equity Spot (Shares)":
-    leverage_option = st.sidebar.radio("Leverage Mode:", ["1x (Cash Delivery)", "5x (Intraday MIS Leverage)"], index=1)
+    leverage_option = st.sidebar.radio("Leverage Mode:", ["1x (Cash Delivery)", "5x (Intraday MIS Leverage)"], index=1 if "5x" in default_lev else 0)
     leverage_multiplier = 5.0 if "5x" in leverage_option else 1.0
     buying_power = capital * leverage_multiplier
-elif market_mode == "MCX Commodities":
-    leverage_multiplier = 1.0
-    buying_power = capital
 else:
     leverage_multiplier = 1.0
     buying_power = capital
     option_strike_mode = st.sidebar.radio("Option Moneyness:", ["ATM (At-The-Money)", "ITM (In-The-Money)"])
     strike_type = "ITM" if "ITM" in option_strike_mode else "ATM"
+    dte_input = st.sidebar.slider("Days to Expiry (DTE):", 1, 30, 14)
 
 max_risk_rupees = capital * max_risk_pct_input
 
-st.sidebar.info(f"💰 **Capital Allocated:** ₹{buying_power:,.2f}")
-st.sidebar.warning(f"🛑 **Max Risk Capped At:** ₹{max_risk_rupees:,.2f} ({max_risk_pct_input*100:.1f}%)")
+st.sidebar.info(f"💰 **Buying / Capital Allocated:** ₹{buying_power:,.2f}")
+st.sidebar.warning(f"🛑 **Max Rupee Loss Capped At:** ₹{max_risk_rupees:,.2f} ({max_risk_pct_input*100:.1f}%)")
 
 st.sidebar.header("⚙️ Configuration & Filters")
-if market_mode == "MCX Commodities":
-    universe = load_mcx_universe()
-else:
-    universe = load_stock_universe()
-
-min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 20 if market_mode == "MCX Commodities" else 25)
+universe = load_stock_universe()
+min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 30)
 
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 st.title(f"⚡ Medhansh TradingLab — {market_mode}")
-st.caption(f"🟢 **SYSTEM ONLINE** | Last Update: `{now_str}`")
+st.caption(f"🟢 **BSM ENGINE ACTIVE** | Last Update: `{now_str}` | Mode: `{market_mode}`")
 
 @st.cache_data(ttl=20)
 def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback, mode):
@@ -181,40 +227,29 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
             condition = extract_latest_condition(df_ind, ticker)
             scores = score_market_condition(condition, df_ind)
             
-            clean_name = MCX_NAMES.get(ticker, ("NIFTY 50" if ticker == "^NSEI" else ("BANK NIFTY" if ticker == "^NSEBANK" else ticker)))
-
-            if mode == "MCX Commodities":
-                trend_info = analyze_mcx_trend(
-                    condition.get('Price', 0),
-                    condition.get('RSI', 50),
-                    condition.get('RVOL', 1.0),
-                    condition.get('Daily_Change', 0)
-                )
-                setup = generate_mcx_setup(
-                    symbol=ticker,
-                    price=condition.get('Price', 0),
-                    atr=condition.get('ATR', 0),
-                    capital=capital_input,
+            if mode == "Equity Spot (Shares)":
+                setup = generate_trade_setup(
+                    condition.get('Price', 0), 
+                    condition.get('ATR', 0), 
+                    total_capital=capital_input, 
+                    leverage=leverage_input,
                     max_risk_pct=risk_pct
                 )
-            elif mode == "Equity Spot (Shares)":
-                trend_info = analyze_option_trend(
-                    condition.get('Price', 0), condition.get('RSI', 50), condition.get('RVOL', 1.0), condition.get('Daily_Change', 0)
-                )
-                setup = generate_trade_setup(
-                    condition.get('Price', 0), condition.get('ATR', 0), total_capital=capital_input, leverage=leverage_input, max_risk_pct=risk_pct
-                )
             else:
-                trend_info = analyze_option_trend(
-                    condition.get('Price', 0), condition.get('RSI', 50), condition.get('RVOL', 1.0), condition.get('Daily_Change', 0)
-                )
                 opt_type = "CE" if condition.get('Daily_Change', 0) >= 0 else "PE"
                 setup = generate_option_setup(
-                    symbol=ticker, spot_price=condition.get('Price', 0), atr=condition.get('ATR', 0), capital=capital_input, max_risk_pct=risk_pct, option_type=opt_type, strike_mode=strike_type
+                    symbol=ticker,
+                    spot_price=condition.get('Price', 0),
+                    atr=condition.get('ATR', 0),
+                    capital=capital_input,
+                    max_risk_pct=risk_pct,
+                    df_history=df_ind,
+                    option_type=opt_type,
+                    strike_mode=strike_type,
+                    days_to_expiry=dte_input if 'dte_input' in locals() else 14
                 )
-
-            results[clean_name] = {
-                "RawTicker": ticker,
+            
+            results[ticker] = {
                 "Price": condition.get('Price'),
                 "1D Change %": condition.get('Daily_Change', 0),
                 "Score": scores['total'],
@@ -224,10 +259,10 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
                 "RSI": condition.get('RSI'),
                 "RVOL": condition.get('RVOL'),
                 "ATR": condition.get('ATR'),
-                "TrendInfo": trend_info,
-                "Setup": setup
+                "Setup": setup,
+                "Breakdown": scores['breakdown']
             }
-            chart_dfs[clean_name] = df_ind
+            chart_dfs[ticker] = df_ind
         except Exception:
             continue
 
@@ -236,54 +271,100 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
 results, chart_dfs = run_pipeline(universe, capital, leverage_multiplier, max_risk_pct_input, default_period, market_mode)
 
 if results:
-    df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'Preferred_Buy', 'RSI', 'RVOL']]
+    df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']]
     sorted_df = df_all.sort_values(by=['Score', 'RVOL', '1D Change %'], ascending=[False, False, False])
     
-    winner_name = sorted_df.index[0]
-    winner_setup = results[winner_name]['Setup']
+    winner_ticker = sorted_df.index[0]
+    winner_info = sorted_df.iloc[0]
+    winner_setup = results[winner_ticker]['Setup']
 
-    st.markdown(f"""
-    <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
-        <h2 style="color: #00E676; margin: 0;">🎯 TOP RECOMMENDED TRADE: {winner_name}</h2>
-        <p style="font-size: 15px; color: #CCCCCC;"><b>Current Price / Spot:</b> {results[winner_name]['Price']} | <b>Signal:</b> {results[winner_name]['TrendInfo']['Signal']}</p>
-        <hr style="border-color: #333;">
-        <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-            <div><b>Target:</b> <span style="color:#00E676;">{winner_setup.get('Target', 'N/A')}</span></div>
-            <div><b>Stop Loss:</b> <span style="color:#FF5252;">{winner_setup.get('Stop Loss', winner_setup.get('Option SL', 'N/A'))}</span></div>
-            <div><b>Position Size:</b> <span style="color:#00E676;"><b>{winner_setup.get('Lots', winner_setup.get('Shares to Buy', 'N/A'))} Lots / Qty</b></span></div>
-            <div><b>Max Risk:</b> ₹{winner_setup.get('Max Rupee Risk', 'N/A')} ({winner_setup.get('Risk Pct', 'N/A')}%)</div>
+    if market_mode == "Equity Spot (Shares)":
+        st.markdown(f"""
+        <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
+            <h2 style="color: #00E676; margin: 0;">🏆 TOP SPOT PICK: {winner_ticker} ({winner_setup['Leverage']} Mode)</h2>
+            <p style="font-size: 15px; color: #CCCCCC;"><b>Pattern:</b> {winner_info['Pattern']} | <b>Score:</b> {winner_info['Score']}/50</p>
+            <hr style="border-color: #333;">
+            <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                <div><b>Entry Price:</b> ₹{winner_setup['Entry']}</div>
+                <div><b>Stop Loss ({winner_setup['SL_Pct']}% Drop):</b> <span style="color:#FF5252;">₹{winner_setup['Stop Loss']}</span></div>
+                <div><b>Target Price:</b> <span style="color:#00E676;">₹{winner_setup['Target']}</span></div>
+                <div><b>Shares to Buy:</b> <span style="color:#00E676; font-size:18px;"><b>{winner_setup['Shares to Buy']} Shares</b></span></div>
+                <div><b>Margin Required:</b> ₹{winner_setup['Margin Required']:,}</div>
+                <div><b>Max Loss Risk:</b> ₹{winner_setup['Max Rupee Risk']}</div>
+            </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
+            <h2 style="color: #00E676; margin: 0;">🎯 BSM OPTION PICK: {winner_ticker} {winner_setup['Instrument']}</h2>
+            <p style="font-size: 15px; color: #CCCCCC;"><b>Stock Spot:</b> ₹{winner_info['Price']} | <b>Historical Volatility ($\sigma$):</b> {winner_setup['Ann. Volatility']}% | <b>BSM Delta ($\Delta$):</b> {winner_setup['BSM Delta']}</p>
+            <hr style="border-color: #333;">
+            <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                <div><b>BSM Option Premium:</b> ₹{winner_setup['BSM Premium']}</div>
+                <div><b>Premium Stop Loss:</b> <span style="color:#FF5252;">₹{winner_setup['Option SL']}</span></div>
+                <div><b>Premium Target:</b> <span style="color:#00E676;">₹{winner_setup['Option Target']}</span></div>
+                <div><b>Lots to Buy:</b> <span style="color:#00E676; font-size:18px;"><b>{winner_setup['Lots']} Lot ({winner_setup['Total Qty']} Qty)</b></span></div>
+                <div><b>Capital Allocated:</b> ₹{winner_setup['Premium Required']:,}</div>
+                <div><b>Max Rupee Risk:</b> ₹{winner_setup['Max Rupee Risk']} ({winner_setup['Risk Pct']}%)</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.subheader(f"📊 {market_mode} Market Dashboard")
-    st.dataframe(sorted_df[sorted_df['Score'] >= min_score], use_container_width=True)
+    tab1, tab2 = st.tabs(["🔥 Preferred Breakout Picks", "📊 Full Universe Screener"])
+    
+    with tab1:
+        st.subheader("🔥 High-Conviction Setups")
+        buy_picks = sorted_df[(sorted_df['Preferred_Buy'] == True) | (sorted_df['Score'] >= 40)]
+        if not buy_picks.empty:
+            st.dataframe(buy_picks[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'RSI', 'RVOL']], use_container_width=True)
+        else:
+            st.info("No stocks currently meet strict breakout criteria.")
+
+    with tab2:
+        st.subheader("📊 Stock Universe Screener")
+        st.dataframe(sorted_df[sorted_df['Score'] >= min_score][['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'RSI', 'RVOL']], use_container_width=True)
 
     st.markdown("---")
     
-    selected_asset = st.selectbox("Inspect Asset & Technical Chart:", sorted_df.index.tolist(), index=0)
-    if selected_asset:
-        asset_info, df_asset = results[selected_asset], chart_dfs[selected_asset]
+    all_available = sorted_df.index.tolist()
+    selected_stock = st.selectbox("Inspect Setup & Technical Chart for Any Stock:", all_available, index=0)
+    if selected_stock:
+        stock_info, df_stock = results[selected_stock], chart_dfs[selected_stock]
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.markdown(f"### {selected_asset}")
-            st.metric("Price", f"{asset_info['Price']}", f"{asset_info['1D Change %']}%")
-            st.metric("Algo Score", f"{asset_info['Score']} / 50", delta=asset_info['Status'])
+            st.markdown(f"### {selected_stock}")
+            st.metric("Spot Price", f"₹{stock_info['Price']}", f"{stock_info['1D Change %']}%")
+            st.metric("Algo Score", f"{stock_info['Score']} / 50", delta=stock_info['Status'])
         with col2:
             st.markdown("### Technical Indicators")
-            st.write(f"**Signal:** {asset_info['TrendInfo']['Signal']}")
-            st.write(f"**Pattern:** {asset_info['Pattern']}")
-            st.write(f"**RSI (14):** {asset_info['RSI']}")
-            st.write(f"**RVOL:** {asset_info['RVOL']}x")
+            st.write(f"**Pattern:** {stock_info['Pattern']}")
+            st.write(f"**RSI (14):** {stock_info['RSI']}")
+            st.write(f"**RVOL:** {stock_info['RVOL']}x")
+            st.write(f"**14-Day ATR:** ₹{stock_info['ATR']}")
         with col3:
-            st.markdown("### Trade Plan")
-            setup = asset_info['Setup']
-            for k, v in setup.items():
-                st.write(f"**{k}:** {v}")
+            st.markdown(f"### {'BSM Option Model Output' if market_mode != 'Equity Spot (Shares)' else 'Equity Spot Plan'}")
+            setup = stock_info['Setup']
+            if market_mode == "Equity Spot (Shares)":
+                st.write(f"**Entry:** ₹{setup['Entry']}")
+                st.write(f"**Stop Loss:** ₹{setup['Stop Loss']} (-{setup['SL_Pct']}%)")
+                st.write(f"**Target:** ₹{setup['Target']}")
+                st.write(f"**Position:** {setup['Shares to Buy']} Shares")
+                st.write(f"**Capital Needed:** ₹{setup['Margin Required']:,}")
+            else:
+                st.write(f"**Contract:** {setup['Instrument']}")
+                st.write(f"**BSM Est. Premium:** ₹{setup['BSM Premium']}")
+                st.write(f"**BSM Delta ($\Delta$):** {setup['BSM Delta']}")
+                st.write(f"**Ann. Volatility ($\sigma$):** {setup['Ann. Volatility']}%")
+                st.write(f"**Option SL:** ₹{setup['Option SL']}")
+                st.write(f"**Option Target:** ₹{setup['Option Target']}")
+                st.write(f"**Position:** {setup['Lots']} Lot ({setup['Total Qty']} Contracts)")
+                st.write(f"**Capital Needed:** ₹{setup['Premium Required']:,}")
+                st.write(f"**Max Rupee Risk:** ₹{setup['Max Rupee Risk']}")
         st.markdown("---")
-        st.plotly_chart(render_candlestick_chart(df_asset, selected_asset), use_container_width=True)
+        st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
 else:
-    st.error("Failed to load market data.")'''
+    st.error("Failed to load market data. Please refresh or check connection.")'''
 }
 
 for path, content in files.items():
@@ -293,4 +374,4 @@ for path, content in files.items():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-print("✅ SUCCESS: Added MCX Commodities support!")
+print("✅ SUCCESS: Black-Scholes-Merton (BSM) Engine Integrated!")
