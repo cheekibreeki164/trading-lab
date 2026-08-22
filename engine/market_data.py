@@ -16,10 +16,15 @@ def fetch_batch_market_data(tickers: list, period: str = "3mo") -> dict:
                 else:
                     df = df_batch[t].copy() if t in df_batch else None
 
-                if df is not None and not df.empty and 'Close' in df.columns:
-                    df = df.dropna(subset=['Close'])
-                    if len(df) >= 5:
-                        data_dict[t] = df
+                if df is not None and not df.empty:
+                    # Clean multi-index columns if present
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.get_level_values(0)
+                    
+                    if 'Close' in df.columns:
+                        df = df.dropna(subset=['Close'])
+                        if len(df) >= 5:
+                            data_dict[t] = df
             except Exception:
                 continue
     except Exception:
@@ -38,12 +43,27 @@ def search_and_fetch_stock(symbol: str, period: str = "3mo"):
     else:
         ticker_symbol = symbol
 
+    # Method 1: yf.Ticker().history() (Most reliable for single tickers)
     try:
-        df = yf.download(ticker_symbol, period=period, progress=False, auto_adjust=True)
+        t_obj = yf.Ticker(ticker_symbol)
+        df = t_obj.history(period=period, auto_adjust=True)
         if df is not None and not df.empty and 'Close' in df.columns:
             df = df.dropna(subset=['Close'])
             if len(df) >= 5:
                 return ticker_symbol, df
+    except Exception:
+        pass
+
+    # Method 2: yf.download fallback
+    try:
+        df = yf.download(ticker_symbol, period=period, progress=False, auto_adjust=True)
+        if df is not None and not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            if 'Close' in df.columns:
+                df = df.dropna(subset=['Close'])
+                if len(df) >= 5:
+                    return ticker_symbol, df
     except Exception:
         pass
         
