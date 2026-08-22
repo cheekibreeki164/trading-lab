@@ -91,13 +91,12 @@ def compute_historical_volatility(df, window: int = 30) -> float:
 def generate_option_setup(
     symbol: str, 
     spot_price: float, 
-    atr: float, 
     capital: float, 
     max_risk_pct: float, 
     df_history = None,
     option_type: str = "CE", 
     strike_mode: str = "ATM",
-    days_to_expiry: int = 15,
+    days_to_expiry: int = 14,
     risk_free_rate: float = 0.07
 ) -> dict:
     if not spot_price or spot_price <= 0:
@@ -149,6 +148,8 @@ def generate_option_setup(
 
     decay_curve = compute_greeks_decay_curve(S=spot_price, K=strike, sigma=sigma, option_type=option_type, r=risk_free_rate)
     
+    bsm_score = min(int((sigma * 100) * 0.8 + (bsm_delta * 40)), 100)
+
     return {
         "Instrument": f"{int(strike)} {option_type}",
         "Strike": strike,
@@ -158,6 +159,7 @@ def generate_option_setup(
         "BSM Gamma": bsm_res["gamma"],
         "BSM Theta": bsm_res["theta"],
         "BSM Vega": bsm_res["vega"],
+        "BSM Score": bsm_score,
         "Ann. Volatility": round(sigma * 100, 2),
         "Lot Size": lot_size,
         "Lots": lots_to_buy,
