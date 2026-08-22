@@ -9,7 +9,7 @@ from components.charts import render_candlestick_chart, render_greeks_decay_char
 st.set_page_config(page_title="Medhansh BSM Trading Lab", layout="wide", page_icon="⚡")
 
 st.sidebar.header("🔍 Search Any Stock (NSE/BSE)")
-search_input = st.sidebar.text_input("Enter Stock Symbol (e.g. TATASTEEL, ITC, ZOMATO):", "").strip().upper()
+search_input = st.sidebar.text_input("Enter Stock Symbol (e.g. ZOMATO, TATASTEEL, ITC):", "").strip().upper()
 
 st.sidebar.header("🎯 Option Contract Config")
 opt_type_input = st.sidebar.radio("Option Strategy:", ["Call Option (CE)", "Put Option (PE)"])
@@ -31,15 +31,17 @@ max_risk_pct_input = st.sidebar.slider("Max Account Risk per Trade (%):", 0.5, 5
 
 universe = load_stock_universe()
 
-# Process dynamic custom stock search if requested
+# Process dynamic custom stock search
 custom_ticker = None
+custom_df_found = None
+
 if search_input:
-    formatted_sym, custom_df = search_and_fetch_stock(search_input)
-    if custom_df is not None:
+    formatted_sym, custom_df_found = search_and_fetch_stock(search_input)
+    if custom_df_found is not None:
         custom_ticker = formatted_sym
         if custom_ticker not in universe:
-            universe.append(custom_ticker)
-        st.sidebar.success(f"Added **{custom_ticker}** to universe!")
+            universe.insert(0, custom_ticker)
+        st.sidebar.success(f"Loaded **{custom_ticker}** successfully!")
     else:
         st.sidebar.error(f"Could not fetch data for '{search_input}'. Check ticker symbol.")
 
@@ -48,10 +50,16 @@ now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 st.title("⚡ Medhansh BSM Options & Spot Engine")
 st.caption(f"🟢 **PURE BSM MODEL ACTIVE** | Direction: **{selected_option_type}** | Updated: `{now_str}`")
 
-@st.cache_data(ttl=30)
-def run_pipeline(ticker_list, cap, risk_pct, opt_type, strike_mode, dte_val):
+# Un-cached execution when searching to prevent returning stale failed results
+def run_pipeline_direct(ticker_list, cap, risk_pct, opt_type, strike_mode, dte_val, custom_sym, custom_df):
     results, chart_dfs = {}, {}
-    batch_dfs = fetch_batch_market_data(ticker_list, period="3mo")
+    
+    # If custom searched stock is active, attach its df directly
+    if custom_sym and custom_df is not None:
+        chart_dfs[custom_sym] = custom_df
+
+    batch_dfs = fetch_batch_market_data([t for t in ticker_list if t != custom_sym], period="3mo")
+    batch_dfs.update(chart_dfs)
 
     for ticker, df in batch_dfs.items():
         try:
@@ -99,15 +107,14 @@ def run_pipeline(ticker_list, cap, risk_pct, opt_type, strike_mode, dte_val):
 
     return results, chart_dfs
 
-results, chart_dfs = run_pipeline(
-    universe, capital, max_risk_pct_input, selected_option_type, strike_type, dte_input
+results, chart_dfs = run_pipeline_direct(
+    universe, capital, max_risk_pct_input, selected_option_type, strike_type, dte_input, custom_ticker, custom_df_found
 )
 
 if results:
     df_all = pd.DataFrame.from_dict(results, orient='index')
     sorted_df = df_all.sort_values(by=['BSM Quant Score', '5D Trend Drift %'], ascending=[False, False if selected_option_type == "CE" else True])
 
-    # If user searched a stock specifically, auto-select it if found
     top_stock = custom_ticker if custom_ticker and custom_ticker in sorted_df.index else sorted_df.index[0]
     top_setup = sorted_df.loc[top_stock]['Setup']
 
