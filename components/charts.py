@@ -15,7 +15,7 @@ def render_candlestick_chart(df, symbol: str):
 
     fig.update_layout(
         template='plotly_dark',
-        title=f"{symbol} Price Chart",
+        title=f"{symbol} Price Action",
         xaxis_rangeslider_visible=False,
         height=450,
         margin=dict(l=20, r=20, t=40, b=20),
@@ -29,7 +29,7 @@ def render_greeks_decay_chart(decay_data: dict, symbol: str, instrument: str):
         rows=2, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.08,
-        subplot_titles=(f'{symbol} ({instrument}) — BSM Premium & Delta Decay', 'Daily Theta Decay (₹ / Day)'),
+        subplot_titles=(f'{symbol} ({instrument}) — BSM Premium Decay', 'Theta Loss Profile (₹ / Day)'),
         row_width=[0.35, 0.65]
     )
 
@@ -43,24 +43,16 @@ def render_greeks_decay_chart(decay_data: dict, symbol: str, instrument: str):
 
     fig.add_trace(go.Scatter(
         x=decay_data['DTE'], 
-        y=decay_data['Delta'], 
-        mode='lines', 
-        name='Delta', 
-        line=dict(color='#29B6F6', width=2, dash='dot')
-    ), row=1, col=1)
-
-    fig.add_trace(go.Scatter(
-        x=decay_data['DTE'], 
         y=decay_data['Theta'], 
         mode='lines+markers', 
-        name='Theta (Loss / Day)', 
+        name='Theta (₹/Day)', 
         fill='tozeroy',
         line=dict(color='#FF5252', width=2)
     ), row=2, col=1)
 
     fig.update_xaxes(title_text="Days To Expiration (DTE)", autorange="reversed", row=2, col=1)
-    fig.update_yaxes(title_text="Price / Delta", row=1, col=1)
-    fig.update_yaxes(title_text="Rupees / Day", row=2, col=1)
+    fig.update_yaxes(title_text="Price (₹)", row=1, col=1)
+    fig.update_yaxes(title_text="Loss (₹ / Day)", row=2, col=1)
 
     fig.update_layout(
         template='plotly_dark',

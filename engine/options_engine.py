@@ -27,7 +27,7 @@ def norm_pdf(x: float) -> float:
 
 def black_scholes_merton(S: float, K: float, T: float, r: float, sigma: float, option_type: str = "CE") -> dict:
     if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
-        return {"premium": 0.0, "delta": 0.5, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+        return {"premium": 0.5, "delta": 0.5, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
 
     d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
@@ -73,7 +73,7 @@ def compute_greeks_decay_curve(S: float, K: float, sigma: float, option_type: st
     }
 
 def round_to_strike(price: float, step: float = 50.0) -> float:
-    return round(price / step) * step
+    return max(round(price / step) * step, step)
 
 def compute_historical_volatility(df, window: int = 30) -> float:
     if df is None or len(df) < 5:
@@ -148,7 +148,23 @@ def generate_option_setup(
 
     decay_curve = compute_greeks_decay_curve(S=spot_price, K=strike, sigma=sigma, option_type=option_type, r=risk_free_rate)
     
-    bsm_score = min(int((sigma * 100) * 0.8 + (bsm_delta * 40)), 100)
+    # Measure directional price drift over 5 trading periods
+    if df_history is not None and len(df_history) >= 5:
+        p_now = float(df_history['Close'].iloc[-1])
+        p_past = float(df_history['Close'].iloc[-5])
+        drift_pct = (p_now - p_past) / p_past
+    else:
+        drift_pct = 0.0
+
+    # Direction-Aware Scoring:
+    # CALL options reward positive price trend
+    # PUT options reward negative price trend
+    directional_score = drift_pct * 300.0 if option_type == "CE" else (-drift_pct) * 300.0
+    vol_score = (sigma * 100.0) * 0.4
+    delta_score = bsm_delta * 30.0
+
+    raw_score = 50.0 + directional_score + vol_score + delta_score
+    bsm_score = max(min(int(round(raw_score)), 99), 1)
 
     return {
         "Instrument": f"{int(strike)} {option_type}",
@@ -160,6 +176,7 @@ def generate_option_setup(
         "BSM Theta": bsm_res["theta"],
         "BSM Vega": bsm_res["vega"],
         "BSM Score": bsm_score,
+        "Drift %": round(drift_pct * 100, 2),
         "Ann. Volatility": round(sigma * 100, 2),
         "Lot Size": lot_size,
         "Lots": lots_to_buy,

@@ -1,29 +1,28 @@
 import yfinance as yf
 import pandas as pd
 
-def fetch_batch_market_data(tickers: list, period: str = "6mo") -> dict:
+def fetch_batch_market_data(tickers: list, period: str = "3mo") -> dict:
+    data_dict = {}
+    if not tickers:
+        return data_dict
+
     try:
-        data = yf.download(tickers, period=period, group_by='ticker', threads=True, progress=False)
-        stock_dfs = {}
+        df_batch = yf.download(tickers, period=period, group_by='ticker', progress=False, auto_adjust=True)
         
-        if len(tickers) == 1:
-            ticker = tickers[0]
-            df = data.dropna()
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            if not df.empty:
-                stock_dfs[ticker] = df
-        else:
-            for ticker in tickers:
-                try:
-                    if ticker in data.columns.levels[0]:
-                        df = data[ticker].dropna()
-                        if not df.empty and len(df) >= 15:
-                            stock_dfs[ticker] = df
-                except Exception:
-                    continue
-                    
-        return stock_dfs
-    except Exception as e:
-        print(f"Error fetching batch data: {e}")
-        return {}
+        for t in tickers:
+            try:
+                if len(tickers) == 1:
+                    df = df_batch.copy()
+                else:
+                    df = df_batch[t].copy() if t in df_batch else None
+
+                if df is not None and not df.empty and 'Close' in df.columns:
+                    df = df.dropna(subset=['Close'])
+                    if len(df) >= 5:
+                        data_dict[t] = df
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return data_dict
