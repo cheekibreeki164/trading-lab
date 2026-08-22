@@ -26,3 +26,25 @@ def fetch_batch_market_data(tickers: list, period: str = "3mo") -> dict:
         pass
 
     return data_dict
+
+def search_and_fetch_stock(symbol: str, period: str = "3mo"):
+    symbol = symbol.strip().upper()
+    if not symbol:
+        return None, None
+    
+    # Format symbol for Indian market (NSE default)
+    if not symbol.endswith('.NS') and not symbol.endswith('.BO'):
+        ticker_symbol = f"{symbol}.NS"
+    else:
+        ticker_symbol = symbol
+
+    try:
+        df = yf.download(ticker_symbol, period=period, progress=False, auto_adjust=True)
+        if df is not None and not df.empty and 'Close' in df.columns:
+            df = df.dropna(subset=['Close'])
+            if len(df) >= 5:
+                return ticker_symbol, df
+    except Exception:
+        pass
+        
+    return ticker_symbol, None

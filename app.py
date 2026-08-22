@@ -2,11 +2,14 @@ import streamlit as st
 import pandas as pd
 import datetime
 from engine.data_loader import load_stock_universe
-from engine.market_data import fetch_batch_market_data
+from engine.market_data import fetch_batch_market_data, search_and_fetch_stock
 from engine.options_engine import generate_option_setup
 from components.charts import render_candlestick_chart, render_greeks_decay_chart
 
 st.set_page_config(page_title="Medhansh BSM Trading Lab", layout="wide", page_icon="⚡")
+
+st.sidebar.header("🔍 Search Any Stock (NSE/BSE)")
+search_input = st.sidebar.text_input("Enter Stock Symbol (e.g. TATASTEEL, ITC, ZOMATO):", "").strip().upper()
 
 st.sidebar.header("🎯 Option Contract Config")
 opt_type_input = st.sidebar.radio("Option Strategy:", ["Call Option (CE)", "Put Option (PE)"])
@@ -27,6 +30,19 @@ capital = st.sidebar.number_input("Capital (₹):", min_value=1000.0, value=5000
 max_risk_pct_input = st.sidebar.slider("Max Account Risk per Trade (%):", 0.5, 5.0, 2.0, 0.5) / 100.0
 
 universe = load_stock_universe()
+
+# Process dynamic custom stock search if requested
+custom_ticker = None
+if search_input:
+    formatted_sym, custom_df = search_and_fetch_stock(search_input)
+    if custom_df is not None:
+        custom_ticker = formatted_sym
+        if custom_ticker not in universe:
+            universe.append(custom_ticker)
+        st.sidebar.success(f"Added **{custom_ticker}** to universe!")
+    else:
+        st.sidebar.error(f"Could not fetch data for '{search_input}'. Check ticker symbol.")
+
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 
 st.title("⚡ Medhansh BSM Options & Spot Engine")
@@ -91,8 +107,9 @@ if results:
     df_all = pd.DataFrame.from_dict(results, orient='index')
     sorted_df = df_all.sort_values(by=['BSM Quant Score', '5D Trend Drift %'], ascending=[False, False if selected_option_type == "CE" else True])
 
-    top_stock = sorted_df.index[0]
-    top_setup = sorted_df.iloc[0]['Setup']
+    # If user searched a stock specifically, auto-select it if found
+    top_stock = custom_ticker if custom_ticker and custom_ticker in sorted_df.index else sorted_df.index[0]
+    top_setup = sorted_df.loc[top_stock]['Setup']
 
     color = "#00E676" if selected_option_type == "CE" else "#FF5252"
 
@@ -133,7 +150,9 @@ if results:
 
     with tab_detail:
         st.subheader("⚡ Contract Deep-Dive & Greeks Visualizer")
-        selected_stock = st.selectbox("Choose Instrument:", sorted_df.index.tolist(), index=0)
+        
+        default_index = sorted_df.index.tolist().index(top_stock) if top_stock in sorted_df.index else 0
+        selected_stock = st.selectbox("Choose Instrument:", sorted_df.index.tolist(), index=default_index)
 
         if selected_stock:
             info = results[selected_stock]
