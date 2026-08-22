@@ -1,6 +1,5 @@
 import math
 import numpy as np
-from scipy.stats import norm
 
 LOT_SIZES = {
     "NIFTY": 25,
@@ -20,6 +19,12 @@ LOT_SIZES = {
 
 DEFAULT_LOT_SIZE = 250
 
+def norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+def norm_pdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
 def black_scholes_merton(S: float, K: float, T: float, r: float, sigma: float, option_type: str = "CE") -> dict:
     if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
         return {"premium": 0.0, "delta": 0.5, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
@@ -27,16 +32,16 @@ def black_scholes_merton(S: float, K: float, T: float, r: float, sigma: float, o
     d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
 
-    pdf_d1 = norm.pdf(d1)
+    pdf_d1 = norm_pdf(d1)
 
     if option_type == "CE":
-        premium = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
-        delta = norm.cdf(d1)
-        theta = (- (S * pdf_d1 * sigma) / (2 * math.sqrt(T)) - r * K * math.exp(-r * T) * norm.cdf(d2)) / 365.0
+        premium = S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+        delta = norm_cdf(d1)
+        theta = (- (S * pdf_d1 * sigma) / (2 * math.sqrt(T)) - r * K * math.exp(-r * T) * norm_cdf(d2)) / 365.0
     else:  # PE
-        premium = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
-        delta = norm.cdf(d1) - 1.0
-        theta = (- (S * pdf_d1 * sigma) / (2 * math.sqrt(T)) + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365.0
+        premium = K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
+        delta = norm_cdf(d1) - 1.0
+        theta = (- (S * pdf_d1 * sigma) / (2 * math.sqrt(T)) + r * K * math.exp(-r * T) * norm_cdf(-d2)) / 365.0
 
     gamma = pdf_d1 / (S * sigma * math.sqrt(T))
     vega = (S * pdf_d1 * math.sqrt(T)) / 100.0
