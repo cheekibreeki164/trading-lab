@@ -5,7 +5,6 @@ files = {
 import numpy as np
 from scipy.stats import norm
 
-# Exact Lot Sizes for major NSE F&O Stocks & Indices
 LOT_SIZES = {
     "NIFTY": 25,
     "BANKNIFTY": 15,
@@ -25,41 +24,40 @@ LOT_SIZES = {
 DEFAULT_LOT_SIZE = 250
 
 def black_scholes_merton(S: float, K: float, T: float, r: float, sigma: float, option_type: str = "CE") -> dict:
-    """
-    Calculates theoretical Option Premium and Delta using Black-Scholes-Merton model.
-    S: Spot Price
-    K: Strike Price
-    T: Time to Expiry (in years, e.g., 15/365)
-    r: Risk-free rate (e.g., 0.07 for 7%)
-    sigma: Volatility (annualized, e.g., 0.25 for 25%)
-    """
     if S <= 0 or K <= 0 or T <= 0 or sigma <= 0:
-        return {"premium": 0.0, "delta": 0.5, "d1": 0, "d2": 0}
+        return {"premium": 0.0, "delta": 0.5, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
 
     d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
 
+    pdf_d1 = norm.pdf(d1)
+
     if option_type == "CE":
         premium = S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
         delta = norm.cdf(d1)
+        theta = (- (S * pdf_d1 * sigma) / (2 * math.sqrt(T)) - r * K * math.exp(-r * T) * norm.cdf(d2)) / 365.0
     else:  # PE
         premium = K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
         delta = norm.cdf(d1) - 1.0
+        theta = (- (S * pdf_d1 * sigma) / (2 * math.sqrt(T)) + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365.0
+
+    gamma = pdf_d1 / (S * sigma * math.sqrt(T))
+    vega = (S * pdf_d1 * math.sqrt(T)) / 100.0  # Change per 1% volatility
 
     return {
         "premium": max(round(premium, 2), 0.5),
         "delta": round(delta, 4),
-        "d1": round(d1, 4),
-        "d2": round(d2, 4)
+        "gamma": round(gamma, 6),
+        "theta": round(theta, 2),
+        "vega": round(vega, 2)
     }
 
 def round_to_strike(price: float, step: float = 50.0) -> float:
     return round(price / step) * step
 
 def compute_historical_volatility(df, window: int = 30) -> float:
-    """Computes 30-day annualized historical volatility from close prices."""
     if df is None or len(df) < 5:
-        return 0.25  # Fallback default volatility (25%)
+        return 0.25
     
     log_returns = np.log(df['Close'] / df['Close'].shift(1)).dropna()
     daily_std = log_returns.tail(window).std()
@@ -87,7 +85,6 @@ def generate_option_setup(
     
     lot_size = LOT_SIZES.get(symbol, DEFAULT_LOT_SIZE)
     
-    # 1. Determine Strike Step based on stock price
     if spot_price < 500:
         step = 10.0
     elif spot_price < 1500:
@@ -101,19 +98,18 @@ def generate_option_setup(
     
     if strike_mode == "ITM":
         strike = atm_strike - step if option_type == "CE" else atm_strike + step
-    else:  # ATM
+    elif strike_mode == "OTM":
+        strike = atm_strike + step if option_type == "CE" else atm_strike - step
+    else:
         strike = atm_strike
 
-    # 2. Compute Volatility & Time to Expiry
     sigma = compute_historical_volatility(df_history)
     T = max(days_to_expiry, 1) / 365.0
     
-    # 3. Apply Black-Scholes-Merton Engine
     bsm_res = black_scholes_merton(S=spot_price, K=strike, T=T, r=risk_free_rate, sigma=sigma, option_type=option_type)
     bsm_premium = bsm_res["premium"]
     bsm_delta = abs(bsm_res["delta"])
     
-    # 4. Lot sizing based on BSM calculated premium
     cost_per_lot = bsm_premium * lot_size
     lots_to_buy = int(capital // cost_per_lot) if cost_per_lot > 0 else 0
     if lots_to_buy < 1:
@@ -122,10 +118,7 @@ def generate_option_setup(
     total_quantity = lots_to_buy * lot_size
     total_premium_required = round(total_quantity * bsm_premium, 2)
     
-    # 5. Delta-Adjusted Account Risk Sizing (2% max account risk)
     target_account_loss = capital * max_risk_pct
-    
-    # Premium drop required to hit exact rupee loss
     premium_sl_drop = round(target_account_loss / total_quantity, 2) if total_quantity > 0 else 1.0
     
     option_sl_price = max(round(bsm_premium - premium_sl_drop, 2), 0.50)
@@ -140,6 +133,9 @@ def generate_option_setup(
         "Option Type": option_type,
         "BSM Premium": bsm_premium,
         "BSM Delta": bsm_delta,
+        "BSM Gamma": bsm_res["gamma"],
+        "BSM Theta": bsm_res["theta"],
+        "BSM Vega": bsm_res["vega"],
         "Ann. Volatility": round(sigma * 100, 2),
         "Lot Size": lot_size,
         "Lots": lots_to_buy,
@@ -165,8 +161,7 @@ from components.charts import render_candlestick_chart
 
 st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
 
-# Sidebar - Mode Selection
-market_mode = st.sidebar.selectbox("📈 Asset Class / Mode:", ["Equity Spot (Shares)", "NSE Options (CE/PE Buying)"])
+market_mode = st.sidebar.selectbox("📈 Asset Class / Mode:", ["Equity Spot (Shares)", "NSE Options Engine (BSM)"])
 
 st.sidebar.header("🎯 Trading Strategy Profiles")
 trade_style = st.sidebar.radio(
@@ -196,12 +191,25 @@ if market_mode == "Equity Spot (Shares)":
     leverage_option = st.sidebar.radio("Leverage Mode:", ["1x (Cash Delivery)", "5x (Intraday MIS Leverage)"], index=1 if "5x" in default_lev else 0)
     leverage_multiplier = 5.0 if "5x" in leverage_option else 1.0
     buying_power = capital * leverage_multiplier
+    selected_option_type = "CE"
+    strike_type = "ATM"
+    dte_input = 14
 else:
     leverage_multiplier = 1.0
     buying_power = capital
-    option_strike_mode = st.sidebar.radio("Option Moneyness:", ["ATM (At-The-Money)", "ITM (In-The-Money)"])
-    strike_type = "ITM" if "ITM" in option_strike_mode else "ATM"
+    st.sidebar.header("📊 Options Strategy Specs")
+    opt_selection_mode = st.sidebar.radio("Contract Selection Mode:", ["Auto-Select (Trend Based)", "Call Option (CE)", "Put Option (PE)"])
+    option_strike_mode = st.sidebar.radio("Option Moneyness:", ["ATM (At-The-Money)", "ITM (In-The-Money)", "OTM (Out-Of-The-Money)"])
+    
+    if "ITM" in option_strike_mode:
+        strike_type = "ITM"
+    elif "OTM" in option_strike_mode:
+        strike_type = "OTM"
+    else:
+        strike_type = "ATM"
+        
     dte_input = st.sidebar.slider("Days to Expiry (DTE):", 1, 30, 14)
+    selected_option_type = opt_selection_mode
 
 max_risk_rupees = capital * max_risk_pct_input
 
@@ -214,10 +222,10 @@ min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 30)
 
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 st.title(f"⚡ Medhansh TradingLab — {market_mode}")
-st.caption(f"🟢 **BSM ENGINE ACTIVE** | Last Update: `{now_str}` | Mode: `{market_mode}`")
+st.caption(f"🟢 **BSM OPTIONS ENGINE + GREEKS ACTIVE** | Last Update: `{now_str}`")
 
 @st.cache_data(ttl=20)
-def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback, mode):
+def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback, mode, opt_mode, strike_mode_val, dte_val):
     results, chart_dfs = {}, {}
     batch_dfs = fetch_batch_market_data(ticker_list, period=period_lookback)
     
@@ -236,7 +244,13 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
                     max_risk_pct=risk_pct
                 )
             else:
-                opt_type = "CE" if condition.get('Daily_Change', 0) >= 0 else "PE"
+                if "Call" in opt_mode:
+                    opt_type = "CE"
+                elif "Put" in opt_mode:
+                    opt_type = "PE"
+                else:
+                    opt_type = "CE" if condition.get('Daily_Change', 0) >= 0 else "PE"
+                    
                 setup = generate_option_setup(
                     symbol=ticker,
                     spot_price=condition.get('Price', 0),
@@ -245,8 +259,8 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
                     max_risk_pct=risk_pct,
                     df_history=df_ind,
                     option_type=opt_type,
-                    strike_mode=strike_type,
-                    days_to_expiry=dte_input if 'dte_input' in locals() else 14
+                    strike_mode=strike_mode_val,
+                    days_to_expiry=dte_val
                 )
             
             results[ticker] = {
@@ -268,7 +282,9 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
 
     return results, chart_dfs
 
-results, chart_dfs = run_pipeline(universe, capital, leverage_multiplier, max_risk_pct_input, default_period, market_mode)
+results, chart_dfs = run_pipeline(
+    universe, capital, leverage_multiplier, max_risk_pct_input, default_period, market_mode, selected_option_type, strike_type, dte_input
+)
 
 if results:
     df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']]
@@ -298,7 +314,7 @@ if results:
         st.markdown(f"""
         <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
             <h2 style="color: #00E676; margin: 0;">🎯 BSM OPTION PICK: {winner_ticker} {winner_setup['Instrument']}</h2>
-            <p style="font-size: 15px; color: #CCCCCC;"><b>Stock Spot:</b> ₹{winner_info['Price']} | <b>Historical Volatility ($\sigma$):</b> {winner_setup['Ann. Volatility']}% | <b>BSM Delta ($\Delta$):</b> {winner_setup['BSM Delta']}</p>
+            <p style="font-size: 15px; color: #CCCCCC;"><b>Spot Price:</b> ₹{winner_info['Price']} | <b>Vol ($\sigma$):</b> {winner_setup['Ann. Volatility']}% | <b>Delta ($\Delta$):</b> {winner_setup['BSM Delta']} | <b>Gamma ($\Gamma$):</b> {winner_setup['BSM Gamma']} | <b>Theta ($\Theta$):</b> ₹{winner_setup['BSM Theta']}/day | <b>Vega ($\nu$):</b> ₹{winner_setup['BSM Vega']}</p>
             <hr style="border-color: #333;">
             <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                 <div><b>BSM Option Premium:</b> ₹{winner_setup['BSM Premium']}</div>
@@ -354,7 +370,10 @@ if results:
             else:
                 st.write(f"**Contract:** {setup['Instrument']}")
                 st.write(f"**BSM Est. Premium:** ₹{setup['BSM Premium']}")
-                st.write(f"**BSM Delta ($\Delta$):** {setup['BSM Delta']}")
+                st.write(f"**Delta ($\Delta$):** {setup['BSM Delta']}")
+                st.write(f"**Gamma ($\Gamma$):** {setup['BSM Gamma']}")
+                st.write(f"**Theta ($\Theta$):** ₹{setup['BSM Theta']} / day")
+                st.write(f"**Vega ($\nu$):** ₹{setup['BSM Vega']} per 1% vol")
                 st.write(f"**Ann. Volatility ($\sigma$):** {setup['Ann. Volatility']}%")
                 st.write(f"**Option SL:** ₹{setup['Option SL']}")
                 st.write(f"**Option Target:** ₹{setup['Option Target']}")
@@ -374,4 +393,4 @@ for path, content in files.items():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-print("✅ SUCCESS: Black-Scholes-Merton (BSM) Engine Integrated!")
+print("✅ SUCCESS: Option Greeks (Gamma, Theta, Vega) Integrated!")

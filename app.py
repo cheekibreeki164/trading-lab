@@ -12,8 +12,7 @@ from components.charts import render_candlestick_chart
 
 st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
 
-# Sidebar - Mode Selection
-market_mode = st.sidebar.selectbox("📈 Asset Class / Mode:", ["Equity Spot (Shares)", "NSE Options (CE/PE Buying)"])
+market_mode = st.sidebar.selectbox("📈 Asset Class / Mode:", ["Equity Spot (Shares)", "NSE Options Engine (BSM)"])
 
 st.sidebar.header("🎯 Trading Strategy Profiles")
 trade_style = st.sidebar.radio(
@@ -43,12 +42,25 @@ if market_mode == "Equity Spot (Shares)":
     leverage_option = st.sidebar.radio("Leverage Mode:", ["1x (Cash Delivery)", "5x (Intraday MIS Leverage)"], index=1 if "5x" in default_lev else 0)
     leverage_multiplier = 5.0 if "5x" in leverage_option else 1.0
     buying_power = capital * leverage_multiplier
+    selected_option_type = "CE"
+    strike_type = "ATM"
+    dte_input = 14
 else:
     leverage_multiplier = 1.0
     buying_power = capital
-    option_strike_mode = st.sidebar.radio("Option Moneyness:", ["ATM (At-The-Money)", "ITM (In-The-Money)"])
-    strike_type = "ITM" if "ITM" in option_strike_mode else "ATM"
+    st.sidebar.header("📊 Options Strategy Specs")
+    opt_selection_mode = st.sidebar.radio("Contract Selection Mode:", ["Auto-Select (Trend Based)", "Call Option (CE)", "Put Option (PE)"])
+    option_strike_mode = st.sidebar.radio("Option Moneyness:", ["ATM (At-The-Money)", "ITM (In-The-Money)", "OTM (Out-Of-The-Money)"])
+    
+    if "ITM" in option_strike_mode:
+        strike_type = "ITM"
+    elif "OTM" in option_strike_mode:
+        strike_type = "OTM"
+    else:
+        strike_type = "ATM"
+        
     dte_input = st.sidebar.slider("Days to Expiry (DTE):", 1, 30, 14)
+    selected_option_type = opt_selection_mode
 
 max_risk_rupees = capital * max_risk_pct_input
 
@@ -61,10 +73,10 @@ min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 30)
 
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 st.title(f"⚡ Medhansh TradingLab — {market_mode}")
-st.caption(f"🟢 **BSM ENGINE ACTIVE** | Last Update: `{now_str}` | Mode: `{market_mode}`")
+st.caption(f"🟢 **BSM OPTIONS ENGINE + GREEKS ACTIVE** | Last Update: `{now_str}`")
 
 @st.cache_data(ttl=20)
-def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback, mode):
+def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback, mode, opt_mode, strike_mode_val, dte_val):
     results, chart_dfs = {}, {}
     batch_dfs = fetch_batch_market_data(ticker_list, period=period_lookback)
     
@@ -83,7 +95,13 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
                     max_risk_pct=risk_pct
                 )
             else:
-                opt_type = "CE" if condition.get('Daily_Change', 0) >= 0 else "PE"
+                if "Call" in opt_mode:
+                    opt_type = "CE"
+                elif "Put" in opt_mode:
+                    opt_type = "PE"
+                else:
+                    opt_type = "CE" if condition.get('Daily_Change', 0) >= 0 else "PE"
+                    
                 setup = generate_option_setup(
                     symbol=ticker,
                     spot_price=condition.get('Price', 0),
@@ -92,8 +110,8 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
                     max_risk_pct=risk_pct,
                     df_history=df_ind,
                     option_type=opt_type,
-                    strike_mode=strike_type,
-                    days_to_expiry=dte_input if 'dte_input' in locals() else 14
+                    strike_mode=strike_mode_val,
+                    days_to_expiry=dte_val
                 )
             
             results[ticker] = {
@@ -115,7 +133,9 @@ def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lo
 
     return results, chart_dfs
 
-results, chart_dfs = run_pipeline(universe, capital, leverage_multiplier, max_risk_pct_input, default_period, market_mode)
+results, chart_dfs = run_pipeline(
+    universe, capital, leverage_multiplier, max_risk_pct_input, default_period, market_mode, selected_option_type, strike_type, dte_input
+)
 
 if results:
     df_all = pd.DataFrame.from_dict(results, orient='index')[['Price', '1D Change %', 'Score', 'Status', 'Pattern', 'Preferred_Buy', 'RSI', 'RVOL', 'ATR']]
@@ -145,7 +165,8 @@ if results:
         st.markdown(f"""
         <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
             <h2 style="color: #00E676; margin: 0;">🎯 BSM OPTION PICK: {winner_ticker} {winner_setup['Instrument']}</h2>
-            <p style="font-size: 15px; color: #CCCCCC;"><b>Stock Spot:</b> ₹{winner_info['Price']} | <b>Historical Volatility ($\sigma$):</b> {winner_setup['Ann. Volatility']}% | <b>BSM Delta ($\Delta$):</b> {winner_setup['BSM Delta']}</p>
+            <p style="font-size: 15px; color: #CCCCCC;"><b>Spot Price:</b> ₹{winner_info['Price']} | <b>Vol ($\sigma$):</b> {winner_setup['Ann. Volatility']}% | <b>Delta ($\Delta$):</b> {winner_setup['BSM Delta']} | <b>Gamma ($\Gamma$):</b> {winner_setup['BSM Gamma']} | <b>Theta ($\Theta$):</b> ₹{winner_setup['BSM Theta']}/day | <b>Vega ($
+u$):</b> ₹{winner_setup['BSM Vega']}</p>
             <hr style="border-color: #333;">
             <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                 <div><b>BSM Option Premium:</b> ₹{winner_setup['BSM Premium']}</div>
@@ -201,7 +222,11 @@ if results:
             else:
                 st.write(f"**Contract:** {setup['Instrument']}")
                 st.write(f"**BSM Est. Premium:** ₹{setup['BSM Premium']}")
-                st.write(f"**BSM Delta ($\Delta$):** {setup['BSM Delta']}")
+                st.write(f"**Delta ($\Delta$):** {setup['BSM Delta']}")
+                st.write(f"**Gamma ($\Gamma$):** {setup['BSM Gamma']}")
+                st.write(f"**Theta ($\Theta$):** ₹{setup['BSM Theta']} / day")
+                st.write(f"**Vega ($
+u$):** ₹{setup['BSM Vega']} per 1% vol")
                 st.write(f"**Ann. Volatility ($\sigma$):** {setup['Ann. Volatility']}%")
                 st.write(f"**Option SL:** ₹{setup['Option SL']}")
                 st.write(f"**Option Target:** ₹{setup['Option Target']}")
