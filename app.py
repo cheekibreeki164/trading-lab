@@ -8,7 +8,7 @@ from engine.analyzer import extract_latest_condition
 from engine.scoring import score_market_condition
 from engine.setup_generator import generate_trade_setup
 from engine.options_engine import generate_option_setup
-from components.charts import render_candlestick_chart
+from components.charts import render_candlestick_chart, render_greeks_decay_chart
 
 st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
 
@@ -73,7 +73,7 @@ min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 30)
 
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 st.title(f"⚡ Medhansh TradingLab — {market_mode}")
-st.caption(f"🟢 **BSM OPTIONS ENGINE + GREEKS ACTIVE** | Last Update: `{now_str}`")
+st.caption(f"🟢 **BSM OPTIONS ENGINE + GREEKS VISUALIZER ACTIVE** | Last Update: `{now_str}`")
 
 @st.cache_data(ttl=20)
 def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback, mode, opt_mode, strike_mode_val, dte_val):
@@ -165,8 +165,7 @@ if results:
         st.markdown(f"""
         <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
             <h2 style="color: #00E676; margin: 0;">🎯 BSM OPTION PICK: {winner_ticker} {winner_setup['Instrument']}</h2>
-            <p style="font-size: 15px; color: #CCCCCC;"><b>Spot Price:</b> ₹{winner_info['Price']} | <b>Vol ($\sigma$):</b> {winner_setup['Ann. Volatility']}% | <b>Delta ($\Delta$):</b> {winner_setup['BSM Delta']} | <b>Gamma ($\Gamma$):</b> {winner_setup['BSM Gamma']} | <b>Theta ($\Theta$):</b> ₹{winner_setup['BSM Theta']}/day | <b>Vega ($
-u$):</b> ₹{winner_setup['BSM Vega']}</p>
+            <p style="font-size: 15px; color: #CCCCCC;"><b>Spot Price:</b> ₹{winner_info['Price']} | <b>Vol:</b> {winner_setup['Ann. Volatility']}% | <b>Delta:</b> {winner_setup['BSM Delta']} | <b>Gamma:</b> {winner_setup['BSM Gamma']} | <b>Theta:</b> ₹{winner_setup['BSM Theta']}/day | <b>Vega:</b> ₹{winner_setup['BSM Vega']}</p>
             <hr style="border-color: #333;">
             <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                 <div><b>BSM Option Premium:</b> ₹{winner_setup['BSM Premium']}</div>
@@ -222,18 +221,28 @@ u$):</b> ₹{winner_setup['BSM Vega']}</p>
             else:
                 st.write(f"**Contract:** {setup['Instrument']}")
                 st.write(f"**BSM Est. Premium:** ₹{setup['BSM Premium']}")
-                st.write(f"**Delta ($\Delta$):** {setup['BSM Delta']}")
-                st.write(f"**Gamma ($\Gamma$):** {setup['BSM Gamma']}")
-                st.write(f"**Theta ($\Theta$):** ₹{setup['BSM Theta']} / day")
-                st.write(f"**Vega ($
-u$):** ₹{setup['BSM Vega']} per 1% vol")
-                st.write(f"**Ann. Volatility ($\sigma$):** {setup['Ann. Volatility']}%")
+                st.write(f"**Delta:** {setup['BSM Delta']}")
+                st.write(f"**Gamma:** {setup['BSM Gamma']}")
+                st.write(f"**Theta:** ₹{setup['BSM Theta']} / day")
+                st.write(f"**Vega:** ₹{setup['BSM Vega']} per 1% vol")
+                st.write(f"**Ann. Volatility:** {setup['Ann. Volatility']}%")
                 st.write(f"**Option SL:** ₹{setup['Option SL']}")
                 st.write(f"**Option Target:** ₹{setup['Option Target']}")
                 st.write(f"**Position:** {setup['Lots']} Lot ({setup['Total Qty']} Contracts)")
                 st.write(f"**Capital Needed:** ₹{setup['Premium Required']:,}")
                 st.write(f"**Max Rupee Risk:** ₹{setup['Max Rupee Risk']}")
+        
         st.markdown("---")
-        st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
+        
+        if market_mode != "Equity Spot (Shares)":
+            chart_tab1, chart_tab2 = st.tabs(["📉 Price Candlestick Chart", "⚡ Interactive Greeks Decay Simulator"])
+            with chart_tab1:
+                st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
+            with chart_tab2:
+                st.subheader(f"⚡ Black-Scholes Greeks Decay Profile: {selected_stock} {setup['Instrument']}")
+                st.caption("Visualizing theoretical option price decay, Delta sensitivity, and non-linear Theta loss as Expiry approaches (30 DTE → 1 DTE).")
+                st.plotly_chart(render_greeks_decay_chart(setup['Decay Curve'], selected_stock, setup['Instrument']), use_container_width=True)
+        else:
+            st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
 else:
     st.error("Failed to load market data. Please refresh or check connection.")

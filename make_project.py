@@ -42,7 +42,7 @@ def black_scholes_merton(S: float, K: float, T: float, r: float, sigma: float, o
         theta = (- (S * pdf_d1 * sigma) / (2 * math.sqrt(T)) + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365.0
 
     gamma = pdf_d1 / (S * sigma * math.sqrt(T))
-    vega = (S * pdf_d1 * math.sqrt(T)) / 100.0  # Change per 1% volatility
+    vega = (S * pdf_d1 * math.sqrt(T)) / 100.0
 
     return {
         "premium": max(round(premium, 2), 0.5),
@@ -50,6 +50,24 @@ def black_scholes_merton(S: float, K: float, T: float, r: float, sigma: float, o
         "gamma": round(gamma, 6),
         "theta": round(theta, 2),
         "vega": round(vega, 2)
+    }
+
+def compute_greeks_decay_curve(S: float, K: float, sigma: float, option_type: str = "CE", r: float = 0.07, max_dte: int = 30) -> dict:
+    dtes = list(range(max_dte, 0, -1))
+    premiums, deltas, thetas = [], [], []
+
+    for dte in dtes:
+        T = dte / 365.0
+        res = black_scholes_merton(S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type)
+        premiums.append(res["premium"])
+        deltas.append(abs(res["delta"]))
+        thetas.append(res["theta"])
+
+    return {
+        "DTE": dtes,
+        "Premium": premiums,
+        "Delta": deltas,
+        "Theta": thetas
     }
 
 def round_to_strike(price: float, step: float = 50.0) -> float:
@@ -126,6 +144,8 @@ def generate_option_setup(
     
     actual_rupee_risk = round(premium_sl_drop * total_quantity, 2)
     actual_risk_pct = round((actual_rupee_risk / capital) * 100, 2)
+
+    decay_curve = compute_greeks_decay_curve(S=spot_price, K=strike, sigma=sigma, option_type=option_type, r=risk_free_rate)
     
     return {
         "Instrument": f"{int(strike)} {option_type}",
@@ -144,8 +164,98 @@ def generate_option_setup(
         "Option SL": option_sl_price,
         "Option Target": option_target_price,
         "Max Rupee Risk": actual_rupee_risk,
-        "Risk Pct": actual_risk_pct
+        "Risk Pct": actual_risk_pct,
+        "Decay Curve": decay_curve
     }''',
+
+    "components/charts.py": '''import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+def render_candlestick_chart(df, symbol: str):
+    fig = make_subplots(
+        rows=2, cols=1, 
+        shared_xaxes=True, 
+        vertical_spacing=0.03, 
+        subplot_titles=(f'{symbol} Price & Key Moving Averages', 'RSI (14) Indicator'),
+        row_width=[0.2, 0.8]
+    )
+
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df['Open'],
+        high=df['High'],
+        low=df['Low'],
+        close=df['Close'],
+        name='Price'
+    ), row=1, col=1)
+
+    if 'EMA20' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], mode='lines', name='20 EMA', line=dict(color='#00E676', width=1.5)), row=1, col=1)
+    if 'SMA50' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], mode='lines', name='50 SMA', line=dict(color='#FFD600', width=1.5)), row=1, col=1)
+
+    if 'RSI' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], mode='lines', name='RSI', line=dict(color='#29B6F6', width=1.5)), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dash", line_color="#FF5252", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="#00E676", row=2, col=1)
+
+    fig.update_layout(
+        template='plotly_dark',
+        xaxis_rangeslider_visible=False,
+        height=500,
+        margin=dict(l=20, r=20, t=40, b=20),
+        paper_bgcolor='#131722',
+        plot_bgcolor='#1E222D'
+    )
+    return fig
+
+def render_greeks_decay_chart(decay_data: dict, symbol: str, instrument: str):
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        subplot_titles=(f'{symbol} ({instrument}) — Premium & Delta Decay Over Time', 'Daily Theta Loss (₹ / Day)'),
+        row_width=[0.35, 0.65]
+    )
+
+    fig.add_trace(go.Scatter(
+        x=decay_data['DTE'], 
+        y=decay_data['Premium'], 
+        mode='lines+markers', 
+        name='Est Premium (₹)', 
+        line=dict(color='#00E676', width=2.5)
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=decay_data['DTE'], 
+        y=decay_data['Delta'], 
+        mode='lines', 
+        name='Delta (Delta)', 
+        line=dict(color='#29B6F6', width=2, dash='dot')
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=decay_data['DTE'], 
+        y=decay_data['Theta'], 
+        mode='lines+markers', 
+        name='Theta (Theta / Day)', 
+        fill='tozeroy',
+        line=dict(color='#FF5252', width=2)
+    ), row=2, col=1)
+
+    fig.update_xaxes(title_text="Days To Expiration (DTE)", autorange="reversed", row=2, col=1)
+    fig.update_yaxes(title_text="Price / Delta", row=1, col=1)
+    fig.update_yaxes(title_text="Rupees / Day", row=2, col=1)
+
+    fig.update_layout(
+        template='plotly_dark',
+        height=450,
+        margin=dict(l=20, r=20, t=40, b=20),
+        paper_bgcolor='#131722',
+        plot_bgcolor='#1E222D',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    return fig''',
 
     "app.py": '''import streamlit as st
 import pandas as pd
@@ -157,7 +267,7 @@ from engine.analyzer import extract_latest_condition
 from engine.scoring import score_market_condition
 from engine.setup_generator import generate_trade_setup
 from engine.options_engine import generate_option_setup
-from components.charts import render_candlestick_chart
+from components.charts import render_candlestick_chart, render_greeks_decay_chart
 
 st.set_page_config(page_title="Medhansh TradingLab", layout="wide", page_icon="⚡")
 
@@ -222,7 +332,7 @@ min_score = st.sidebar.slider("Minimum Score Filter:", 0, 50, 30)
 
 now_str = datetime.datetime.now().strftime("%H:%M:%S IST")
 st.title(f"⚡ Medhansh TradingLab — {market_mode}")
-st.caption(f"🟢 **BSM OPTIONS ENGINE + GREEKS ACTIVE** | Last Update: `{now_str}`")
+st.caption(f"🟢 **BSM OPTIONS ENGINE + GREEKS VISUALIZER ACTIVE** | Last Update: `{now_str}`")
 
 @st.cache_data(ttl=20)
 def run_pipeline(ticker_list, capital_input, leverage_input, risk_pct, period_lookback, mode, opt_mode, strike_mode_val, dte_val):
@@ -314,7 +424,7 @@ if results:
         st.markdown(f"""
         <div style="background-color: #1E222D; padding: 20px; border-radius: 10px; border: 2px solid #00E676; margin-bottom: 20px;">
             <h2 style="color: #00E676; margin: 0;">🎯 BSM OPTION PICK: {winner_ticker} {winner_setup['Instrument']}</h2>
-            <p style="font-size: 15px; color: #CCCCCC;"><b>Spot Price:</b> ₹{winner_info['Price']} | <b>Vol ($\sigma$):</b> {winner_setup['Ann. Volatility']}% | <b>Delta ($\Delta$):</b> {winner_setup['BSM Delta']} | <b>Gamma ($\Gamma$):</b> {winner_setup['BSM Gamma']} | <b>Theta ($\Theta$):</b> ₹{winner_setup['BSM Theta']}/day | <b>Vega ($\nu$):</b> ₹{winner_setup['BSM Vega']}</p>
+            <p style="font-size: 15px; color: #CCCCCC;"><b>Spot Price:</b> ₹{winner_info['Price']} | <b>Vol:</b> {winner_setup['Ann. Volatility']}% | <b>Delta:</b> {winner_setup['BSM Delta']} | <b>Gamma:</b> {winner_setup['BSM Gamma']} | <b>Theta:</b> ₹{winner_setup['BSM Theta']}/day | <b>Vega:</b> ₹{winner_setup['BSM Vega']}</p>
             <hr style="border-color: #333;">
             <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                 <div><b>BSM Option Premium:</b> ₹{winner_setup['BSM Premium']}</div>
@@ -370,18 +480,29 @@ if results:
             else:
                 st.write(f"**Contract:** {setup['Instrument']}")
                 st.write(f"**BSM Est. Premium:** ₹{setup['BSM Premium']}")
-                st.write(f"**Delta ($\Delta$):** {setup['BSM Delta']}")
-                st.write(f"**Gamma ($\Gamma$):** {setup['BSM Gamma']}")
-                st.write(f"**Theta ($\Theta$):** ₹{setup['BSM Theta']} / day")
-                st.write(f"**Vega ($\nu$):** ₹{setup['BSM Vega']} per 1% vol")
-                st.write(f"**Ann. Volatility ($\sigma$):** {setup['Ann. Volatility']}%")
+                st.write(f"**Delta:** {setup['BSM Delta']}")
+                st.write(f"**Gamma:** {setup['BSM Gamma']}")
+                st.write(f"**Theta:** ₹{setup['BSM Theta']} / day")
+                st.write(f"**Vega:** ₹{setup['BSM Vega']} per 1% vol")
+                st.write(f"**Ann. Volatility:** {setup['Ann. Volatility']}%")
                 st.write(f"**Option SL:** ₹{setup['Option SL']}")
                 st.write(f"**Option Target:** ₹{setup['Option Target']}")
                 st.write(f"**Position:** {setup['Lots']} Lot ({setup['Total Qty']} Contracts)")
                 st.write(f"**Capital Needed:** ₹{setup['Premium Required']:,}")
                 st.write(f"**Max Rupee Risk:** ₹{setup['Max Rupee Risk']}")
+        
         st.markdown("---")
-        st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
+        
+        if market_mode != "Equity Spot (Shares)":
+            chart_tab1, chart_tab2 = st.tabs(["📉 Price Candlestick Chart", "⚡ Interactive Greeks Decay Simulator"])
+            with chart_tab1:
+                st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
+            with chart_tab2:
+                st.subheader(f"⚡ Black-Scholes Greeks Decay Profile: {selected_stock} {setup['Instrument']}")
+                st.caption("Visualizing theoretical option price decay, Delta sensitivity, and non-linear Theta loss as Expiry approaches (30 DTE → 1 DTE).")
+                st.plotly_chart(render_greeks_decay_chart(setup['Decay Curve'], selected_stock, setup['Instrument']), use_container_width=True)
+        else:
+            st.plotly_chart(render_candlestick_chart(df_stock, selected_stock), use_container_width=True)
 else:
     st.error("Failed to load market data. Please refresh or check connection.")'''
 }
@@ -393,4 +514,4 @@ for path, content in files.items():
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-print("✅ SUCCESS: Option Greeks (Gamma, Theta, Vega) Integrated!")
+print("✅ FIXED: f-string syntax error resolved!")

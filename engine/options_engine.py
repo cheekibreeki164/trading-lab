@@ -39,7 +39,7 @@ def black_scholes_merton(S: float, K: float, T: float, r: float, sigma: float, o
         theta = (- (S * pdf_d1 * sigma) / (2 * math.sqrt(T)) + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365.0
 
     gamma = pdf_d1 / (S * sigma * math.sqrt(T))
-    vega = (S * pdf_d1 * math.sqrt(T)) / 100.0  # Change per 1% volatility
+    vega = (S * pdf_d1 * math.sqrt(T)) / 100.0
 
     return {
         "premium": max(round(premium, 2), 0.5),
@@ -47,6 +47,24 @@ def black_scholes_merton(S: float, K: float, T: float, r: float, sigma: float, o
         "gamma": round(gamma, 6),
         "theta": round(theta, 2),
         "vega": round(vega, 2)
+    }
+
+def compute_greeks_decay_curve(S: float, K: float, sigma: float, option_type: str = "CE", r: float = 0.07, max_dte: int = 30) -> dict:
+    dtes = list(range(max_dte, 0, -1))
+    premiums, deltas, thetas = [], [], []
+
+    for dte in dtes:
+        T = dte / 365.0
+        res = black_scholes_merton(S=S, K=K, T=T, r=r, sigma=sigma, option_type=option_type)
+        premiums.append(res["premium"])
+        deltas.append(abs(res["delta"]))
+        thetas.append(res["theta"])
+
+    return {
+        "DTE": dtes,
+        "Premium": premiums,
+        "Delta": deltas,
+        "Theta": thetas
     }
 
 def round_to_strike(price: float, step: float = 50.0) -> float:
@@ -123,6 +141,8 @@ def generate_option_setup(
     
     actual_rupee_risk = round(premium_sl_drop * total_quantity, 2)
     actual_risk_pct = round((actual_rupee_risk / capital) * 100, 2)
+
+    decay_curve = compute_greeks_decay_curve(S=spot_price, K=strike, sigma=sigma, option_type=option_type, r=risk_free_rate)
     
     return {
         "Instrument": f"{int(strike)} {option_type}",
@@ -141,5 +161,6 @@ def generate_option_setup(
         "Option SL": option_sl_price,
         "Option Target": option_target_price,
         "Max Rupee Risk": actual_rupee_risk,
-        "Risk Pct": actual_risk_pct
+        "Risk Pct": actual_risk_pct,
+        "Decay Curve": decay_curve
     }
